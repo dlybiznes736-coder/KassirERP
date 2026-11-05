@@ -226,7 +226,54 @@ INSERT INTO bench.params SELECT 'trig_store', id::text FROM s;
 
 -- Та же структура, те же данные и индексы, те же FK и RLS — только без триггера.
 CREATE TABLE bench.sm_clone (LIKE public.stock_movements INCLUDING DEFAULTS INCLUDING CONSTRAINTS);
+
+-- Копия должна содержать строки ВСЕХ тенантов. RLS может её обрезать:
+--   * суперпользователь / BYPASSRLS — RLS не действует, FORCE ни на что не влияет;
+--   * владелец таблицы — RLS действует только при FORCE: снимаем на время копирования;
+--   * не владелец — RLS действует всегда, снять FORCE нельзя и бесполезно → ошибка.
+-- Всё в одной транзакции: при любой ошибке ALTER TABLE откатится и FORCE вернётся.
+BEGIN;
+DO $$
+DECLARE
+  bypass boolean;
+  forced boolean;
+  is_owner boolean;
+BEGIN
+  SELECT rolsuper OR rolbypassrls INTO bypass FROM pg_roles WHERE rolname = current_user;
+  SELECT c.relforcerowsecurity, pg_has_role(current_user, c.relowner, 'USAGE')
+    INTO forced, is_owner
+    FROM pg_class c WHERE c.oid = 'public.stock_movements'::regclass;
+
+  IF bypass THEN
+    RAISE NOTICE 'Копия журнала: роль % обходит RLS, FORCE снимать не нужно', current_user;
+  ELSIF NOT is_owner THEN
+    RAISE EXCEPTION 'Роль % не владелец stock_movements и не обходит RLS: копия будет неполной. Запускайте bench.sql от postgres', current_user;
+  ELSIF forced THEN
+    ALTER TABLE public.stock_movements NO FORCE ROW LEVEL SECURITY;
+    PERFORM set_config('bench.force_removed', 'on', true);
+    RAISE NOTICE 'Копия журнала: FORCE ROW LEVEL SECURITY временно снят';
+  END IF;
+END $$;
+
 INSERT INTO bench.sm_clone SELECT * FROM public.stock_movements;
+
+DO $$
+DECLARE n_src bigint; n_dst bigint;
+BEGIN
+  SELECT count(*) INTO n_src FROM public.stock_movements;
+  SELECT count(*) INTO n_dst FROM bench.sm_clone;
+  IF n_src IS DISTINCT FROM n_dst THEN
+    RAISE EXCEPTION 'Копия журнала неполная: в stock_movements % строк, в bench.sm_clone %', n_src, n_dst;
+  END IF;
+  RAISE NOTICE 'Копия журнала: % строк, совпадает с оригиналом', n_dst;
+
+  IF current_setting('bench.force_removed', true) = 'on' THEN
+    ALTER TABLE public.stock_movements FORCE ROW LEVEL SECURITY;
+    RAISE NOTICE 'Копия журнала: FORCE ROW LEVEL SECURITY возвращён';
+  END IF;
+END $$;
+COMMIT;
+
 ALTER TABLE bench.sm_clone ADD PRIMARY KEY (id);
 CREATE INDEX ON bench.sm_clone (tenant_id, variant_id, occurred_at);
 CREATE UNIQUE INDEX ON bench.sm_clone (tenant_id, reason, doc_line_id) WHERE doc_line_id IS NOT NULL;
