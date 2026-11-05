@@ -1,0 +1,56 @@
+# Kassir ERP — локальная среда разработки.
+# Только для разработки: пароли ниже не использовать на реальных установках.
+name: kassir
+
+services:
+  postgres:
+    image: postgres:16.4
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_dev
+      POSTGRES_DB: kassir
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - timezone=UTC
+      - -c
+      - log_min_duration_statement=200
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Выполняется только при первом запуске на пустом томе.
+      - ./db/kassir_schema_v1.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./db:/db:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kassir"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ВНИМАНИЕ: образ minio/minio больше не скачивается с Docker Hub.
+  # Хранилище для фото выберем отдельно, а пока сервис выключен из
+  # обычного запуска (включается так: docker compose --profile storage up -d).
+  minio:
+    profiles: ["storage"]
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: kassir
+      MINIO_ROOT_PASSWORD: kassir_dev_secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+  redis:
+    image: redis:7.4.1-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:
+  miniodata:
