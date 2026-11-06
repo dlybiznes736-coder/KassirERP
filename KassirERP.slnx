@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KassirERP.Api/KassirERP.Api.csproj" />
+    <Project Path="src/KassirERP.Application/KassirERP.Application.csproj" />
+    <Project Path="src/KassirERP.Domain/KassirERP.Domain.csproj" />
+    <Project Path="src/KassirERP.Infrastructure/KassirERP.Infrastructure.csproj" />
+  </Folder>
+</Solution>

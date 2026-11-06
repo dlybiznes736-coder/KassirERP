@@ -1,0 +1,7 @@
+@api = http://localhost:5256
+
+### Процесс жив
+GET {{api}}/health/live
+
+### Готов принимать запросы (Postgres + роль)
+GET {{api}}/health/ready

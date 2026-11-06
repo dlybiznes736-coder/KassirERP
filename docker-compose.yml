@@ -17,8 +17,10 @@ services:
       - timezone=UTC
       - -c
       - log_min_duration_statement=200
+    # Наружу — 15432: на машине разработки 5432 и 5433 часто заняты локальными
+    # Postgres (службы Windows), и localhost молча уходит в чужую базу.
     ports:
-      - "5432:5432"
+      - "15432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       # Выполняется только при первом запуске на пустом томе.

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- HTTP-вход: эндпоинты, health checks, сборка зависимостей. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\KassirERP.Application\KassirERP.Application.csproj" />
+    <ProjectReference Include="..\KassirERP.Infrastructure\KassirERP.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>
