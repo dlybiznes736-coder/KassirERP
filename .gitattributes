@@ -1,0 +1,3 @@
+# Скрипты, которые исполняются внутри Linux-контейнера: только LF
+*.sh text eol=lf
+db/bench/concurrency/* text eol=lf
