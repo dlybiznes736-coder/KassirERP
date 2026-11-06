@@ -151,6 +151,37 @@ BEGIN
   END LOOP;
 END $f$;
 
+-- То же количество движений, но пачками: каждый INSERT ... SELECT пишет
+-- p_batch строк, всё в одной транзакции. Так обязаны работать импорт,
+-- инвентаризация и kassir-migrate. Триггер уровня оператора сдвигает
+-- строку stock один раз на пару за оператор, поэтому роста быть не должно.
+CREATE PROCEDURE bench.trig_bulk(p_code text, p_descr text, p_mode text, p_hot int DEFAULT 1,
+                                 p_n int DEFAULT 10000, p_batch int DEFAULT 1000)
+LANGUAGE plpgsql AS $f$
+DECLARE
+  t_id uuid := current_tenant_id();
+  st   uuid := (SELECT v::uuid FROM bench.params WHERE k = 'trig_store');
+  vids uuid[];
+  t0   timestamptz;
+BEGIN
+  SELECT array_agg(id ORDER BY id) INTO vids
+    FROM (SELECT id FROM product_variants ORDER BY id LIMIT p_n) x;
+  IF coalesce(array_length(vids, 1), 0) < p_n THEN
+    RAISE EXCEPTION 'В тенанте замера меньше % пар', p_n;
+  END IF;
+
+  FOR b IN 1..(p_n / p_batch) LOOP
+    t0 := clock_timestamp();
+    INSERT INTO stock_movements (id, tenant_id, store_id, variant_id, qty, reason, occurred_at)
+    SELECT uuid_v7(), t_id, st,
+           CASE WHEN p_mode = 'hot' THEN vids[p_hot] ELSE vids[(b - 1) * p_batch + g] END,
+           1, 'adjustment', clock_timestamp()
+    FROM generate_series(1, p_batch) g;
+    INSERT INTO bench.trig (code, descr, batch_no, rows, ms)
+    VALUES (p_code, p_descr, b, p_batch, extract(epoch FROM clock_timestamp() - t0) * 1000);
+  END LOOP;
+END $f$;
+
 -- ---------------------------------------------------------------------
 -- Параметры запросов: худшие случаи по данным основного тенанта
 -- ---------------------------------------------------------------------
@@ -266,31 +297,31 @@ LEFT JOIN stock s ON s.tenant_id = v.tenant_id AND s.store_id = {store} AND s.va
 WHERE v.barcode = {bc_missing} AND v.deleted_at IS NULL
 $q$);
 
-CALL bench.run('Поиск по названию — редкий запрос «кроссовки runner»', 'ix_products_name_trgm', 50, $q$
+CALL bench.run('Поиск по названию — редкий запрос «кроссовки runner» (50 товаров со всеми парами)', 'ix_products_name_trgm', 50, $q$
 SELECT p.id, p.name, p.brand, v.id AS variant_id, v.size, v.color, v.sale_price
-FROM products p
+FROM (SELECT id, name, brand FROM products
+      WHERE deleted_at IS NULL AND name ILIKE '%' || {q_rare} || '%'
+      ORDER BY name, id LIMIT 50) p
 JOIN product_variants v ON v.product_id = p.id AND v.deleted_at IS NULL
-WHERE p.deleted_at IS NULL AND p.name ILIKE '%' || {q_rare} || '%'
 ORDER BY p.name, p.id, v.size, v.color
-LIMIT 50
 $q$);
 
-CALL bench.run('Поиск по названию — частый запрос «кроссовки»', 'ix_products_name_trgm', 50, $q$
+CALL bench.run('Поиск по названию — частый запрос «кроссовки» (50 товаров со всеми парами)', 'ix_products_name_trgm', 50, $q$
 SELECT p.id, p.name, p.brand, v.id AS variant_id, v.size, v.color, v.sale_price
-FROM products p
+FROM (SELECT id, name, brand FROM products
+      WHERE deleted_at IS NULL AND name ILIKE '%' || {q_freq} || '%'
+      ORDER BY name, id LIMIT 50) p
 JOIN product_variants v ON v.product_id = p.id AND v.deleted_at IS NULL
-WHERE p.deleted_at IS NULL AND p.name ILIKE '%' || {q_freq} || '%'
 ORDER BY p.name, p.id, v.size, v.color
-LIMIT 50
 $q$);
 
-CALL bench.run('Поиск по названию — короткий запрос «run»', 'ix_products_name_trgm', 50, $q$
+CALL bench.run('Поиск по названию — короткий запрос «run» (50 товаров со всеми парами)', 'ix_products_name_trgm', 50, $q$
 SELECT p.id, p.name, p.brand, v.id AS variant_id, v.size, v.color, v.sale_price
-FROM products p
+FROM (SELECT id, name, brand FROM products
+      WHERE deleted_at IS NULL AND name ILIKE '%' || {q_short} || '%'
+      ORDER BY name, id LIMIT 50) p
 JOIN product_variants v ON v.product_id = p.id AND v.deleted_at IS NULL
-WHERE p.deleted_at IS NULL AND p.name ILIKE '%' || {q_short} || '%'
 ORDER BY p.name, p.id, v.size, v.color
-LIMIT 50
 $q$);
 
 CALL bench.run('Товары категории — самая большая, первая страница', 'ix_products_category', 30, $q$
@@ -327,7 +358,9 @@ WHERE s.store_id = {store}
 GROUP BY 1 ORDER BY 1
 $q$);
 
-CALL bench.run('Отчёт за год — выручка, себестоимость, прибыль по дням, все филиалы', 'ix_sales_store_date', 300, $q$
+-- Все филиалы за год — это почти вся таблица: Seq Scan здесь правильный план,
+-- индекс не применим. Цель ТЗ — 1000 мс. Ускорение — таблица дневных итогов (этап 2).
+CALL bench.run('Отчёт за год — выручка, себестоимость, прибыль по дням, все филиалы', NULL, 1000, $q$
 SELECT (s.created_at_local AT TIME ZONE 'Asia/Bishkek')::date AS day,
        sum(CASE WHEN s.type = 'sale' THEN i.total ELSE -i.total END)                       AS revenue,
        sum(CASE WHEN s.type = 'sale' THEN i.qty * i.cost_price ELSE -i.qty * i.cost_price END) AS cost,
@@ -391,7 +424,7 @@ $q$);
 -- =====================================================================
 -- 2. Стоимость триггеров
 -- =====================================================================
-\echo '== Тест триггеров: 6 сценариев по 10 000 строк'
+\echo '== Тест триггеров: 8 сценариев по 10 000 строк'
 SET app.tenant_id = :'trig_tenant';
 
 CALL bench.trig_run('T1', 'Без триггера (копия журнала): 10 000 разных пар, одна транзакция', 'clone', 'distinct', false);
@@ -404,6 +437,10 @@ SET synchronous_commit = off;
 CALL bench.trig_run('T5', 'Без триггера (копия журнала): одна пара 10 000 раз, COMMIT на каждую строку', 'clone', 'hot', true, 2);
 CALL bench.trig_run('T6', 'С триггером: одна пара 10 000 раз, COMMIT на каждую строку', 'main', 'hot', true, 3);
 RESET synchronous_commit;
+
+-- Пакетная запись (правило для импорта / инвентаризации / kassir-migrate)
+CALL bench.trig_bulk('T7', 'С триггером: одна пара 10 000 раз, пачками по 1 000 (INSERT ... SELECT), одна транзакция', 'hot', 4);
+CALL bench.trig_bulk('T8', 'С триггером: 10 000 разных пар, пачками по 1 000 (INSERT ... SELECT), одна транзакция', 'distinct');
 
 RESET ROLE;
 RESET app.tenant_id;
@@ -470,9 +507,10 @@ SELECT format(E'Чеков основного тенанта: %s продаж + 
 SELECT E'## Итог по запросам\n\n'
   '| # | Запрос | Индекс | Индекс в плане | Цель ТЗ | Медиана | Первый прогон | Строк | Итог |\n'
   '|--:|---|---|:-:|--:|--:|--:|--:|---|\n' ||
-  string_agg(format('| %s | %s | `%s` | %s | %s | %s мс | %s мс | %s | %s |',
-    ord, label, idx,
-    CASE WHEN position(idx IN plan) > 0 THEN 'да' ELSE '**нет**' END,
+  string_agg(format('| %s | %s | %s | %s | %s | %s мс | %s мс | %s | %s |',
+    ord, label,
+    CASE WHEN idx IS NULL THEN '— (Seq Scan)' ELSE '`' || idx || '`' END,
+    CASE WHEN idx IS NULL THEN '—' WHEN position(idx IN plan) > 0 THEN 'да' ELSE '**нет**' END,
     coalesce('< ' || target_ms || ' мс', '—'),
     median_ms, first_ms, rows_out,
     CASE WHEN target_ms IS NULL THEN 'цели в ТЗ нет'
@@ -487,13 +525,14 @@ FROM bench.results;
 -- Подробно по каждому запросу
 SELECT E'## Запросы подробно\n\n' ||
   string_agg(format(E'### %s. %s\n\n'
-    'Цель ТЗ: %s · медиана **%s мс** (%s прогонов) · первый прогон %s мс · мин %s / макс %s мс · индекс `%s`\n\n'
+    'Цель ТЗ: %s · медиана **%s мс** (%s прогонов) · первый прогон %s мс · мин %s / макс %s мс · индекс %s\n\n'
     '**Итог: %s**\n\n'
     '```sql\n%s\n```\n\n'
     '```\n%s```\n',
     ord, label,
     coalesce('< ' || target_ms || ' мс', 'нет'),
-    median_ms, runs, first_ms, min_ms, max_ms, idx,
+    median_ms, runs, first_ms, min_ms, max_ms,
+    CASE WHEN idx IS NULL THEN 'не нужен (Seq Scan)' ELSE '`' || idx || '`' END,
     CASE WHEN target_ms IS NULL THEN 'цели в ТЗ нет, для справки'
          WHEN median_ms < target_ms THEN 'ПРОЙДЕНО'
          ELSE 'НЕ ПРОЙДЕНО' END,
@@ -502,7 +541,7 @@ FROM bench.results;
 
 -- Триггеры: сводка
 SELECT E'## Стоимость триггеров\n\n'
-  'Вставка 10 000 строк в `stock_movements`, каждая — отдельный `INSERT` (как строка чека). '
+  'Вставка 10 000 строк в `stock_movements`: в T1–T6 каждая — отдельный `INSERT` (как строка чека), в T7–T8 — пачками по 1 000 строк одним `INSERT ... SELECT` (как импорт или инвентаризация). '
   'Время снято по пачкам из 1 000 строк. Рост = (среднее за последние 3 пачки) / (среднее за первые 3). '
   'База для сравнения — копия журнала с теми же данными, индексами, FK и RLS, но без триггера `movement_to_stock`. '
   'В T5/T6 `synchronous_commit = off`, чтобы мерить триггер, а не fsync диска.\n\n'
@@ -524,12 +563,17 @@ SELECT format(E'Цена триггера `movement_to_stock` (разница с
   '- новая строка остатка (INSERT в stock): **%s мс/строку** (T2 − T1)\n'
   '- существующая строка остатка (UPDATE stock): **%s мс/строку** (T3 − T1)\n'
   '- одна и та же пара, коммит на строку: **%s мс/строку** (T6 − T5)\n'
-  '- одна и та же пара 10 000 раз в одной транзакции: **%s мс/строку** (T4 − T1)\n',
-  round(t2 - t1, 4), round(t3 - t1, 4), round(t6 - t5, 4), round(t4 - t1, 4))
+  '- одна и та же пара 10 000 раз в одной транзакции, по строке: **%s мс/строку** (T4 − T1)\n'
+  '- одна и та же пара 10 000 раз в одной транзакции, пачками: **%s мс/строку** всего (T7) — '
+  'в %s раз быстрее T4\n'
+  '- 10 000 разных пар пачками: **%s мс/строку** всего (T8) против %s по строке (T3)\n',
+  round(t2 - t1, 4), round(t3 - t1, 4), round(t6 - t5, 4), round(t4 - t1, 4),
+  round(t7, 4), round(t4 / nullif(t7, 0), 1), round(t8, 4), round(t3, 4))
 FROM (
   SELECT max(r) FILTER (WHERE code = 'T1') t1, max(r) FILTER (WHERE code = 'T2') t2,
          max(r) FILTER (WHERE code = 'T3') t3, max(r) FILTER (WHERE code = 'T4') t4,
-         max(r) FILTER (WHERE code = 'T5') t5, max(r) FILTER (WHERE code = 'T6') t6
+         max(r) FILTER (WHERE code = 'T5') t5, max(r) FILTER (WHERE code = 'T6') t6,
+         max(r) FILTER (WHERE code = 'T7') t7, max(r) FILTER (WHERE code = 'T8') t8
   FROM (SELECT code, sum(ms) / sum(rows) r FROM bench.trig GROUP BY code) x
 ) y;
 

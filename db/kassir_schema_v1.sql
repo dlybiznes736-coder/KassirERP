@@ -7,7 +7,8 @@
 --     Для серверных строк есть uuid_v7().
 --  2. Деньги — numeric(14,2). Количество — numeric(14,3) (под кафе).
 --  3. tenant_id во всех таблицах.
---  4. stock_movements — только INSERT; stock меняется триггером на 1 строку.
+--  4. stock_movements — только INSERT; stock меняется триггером уровня
+--     оператора: одно обновление на пару за оператор (см. «Триггеры: остатки»).
 --  5. sale_items / purchase_items хранят свои price и cost_price.
 --  6. Все времена — timestamptz, сервер в UTC.
 --  7. Фото — только storage_key (относительный путь).
@@ -393,46 +394,71 @@ END $$;
 
 -- =====================================================================
 -- Триггеры: остатки
+--
+-- Все три триггера ниже — уровня ОПЕРАТОРА (FOR EACH STATEMENT, transition
+-- tables): строки одного оператора сворачиваются по (тенант, склад, пара),
+-- и каждая строка stock сдвигается ровно один раз за оператор.
+--
+-- ПРАВИЛО ДЛЯ ПАКЕТНЫХ ОПЕРАЦИЙ (импорт, инвентаризация, массовая приёмка,
+-- kassir-migrate): движения транзакции пишутся одним INSERT ... SELECT
+-- (при необходимости — через временную таблицу), а не циклом по строкам.
+-- N отдельных INSERT по одной паре в одной транзакции оставляют N версий
+-- одной строки stock, и время на строку растёт линейно (замер T4 в
+-- db/bench/bench.sql; T7 — то же самое пачками, без роста).
+--
+-- kassir-migrate переносит stock_movements и stock как есть, с
+-- SET session_replication_role = replica (триггеры не срабатывают), и затем
+-- сверяет stock = SUM(stock_movements).
 -- =====================================================================
 
--- Каждое движение сдвигает ровно одну строку stock.
+-- Движения оператора → одно обновление stock на пару.
 CREATE FUNCTION trg_movement_to_stock() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
-  INSERT INTO stock (tenant_id, store_id, variant_id, qty, updated_at)
-  VALUES (NEW.tenant_id, NEW.store_id, NEW.variant_id, NEW.qty, now())
+  INSERT INTO stock AS s (tenant_id, store_id, variant_id, qty, updated_at)
+  SELECT tenant_id, store_id, variant_id, sum(qty), now()
+  FROM new_movements
+  GROUP BY tenant_id, store_id, variant_id
+  -- Единый порядок блокировок строк stock: параллельные пакеты не
+  -- заблокируют друг друга взаимно.
+  ORDER BY tenant_id, store_id, variant_id
   ON CONFLICT (tenant_id, store_id, variant_id)
-  DO UPDATE SET qty = stock.qty + EXCLUDED.qty, updated_at = now();
+  DO UPDATE SET qty = s.qty + EXCLUDED.qty, updated_at = now();
   RETURN NULL;
 END $$;
 
 CREATE TRIGGER movement_to_stock AFTER INSERT ON stock_movements
-  FOR EACH ROW EXECUTE FUNCTION trg_movement_to_stock();
+  REFERENCING NEW TABLE AS new_movements
+  FOR EACH STATEMENT EXECUTE FUNCTION trg_movement_to_stock();
 
 CREATE TRIGGER forbid_change BEFORE UPDATE OR DELETE ON stock_movements
   FOR EACH ROW EXECUTE FUNCTION trg_forbid_change();
 
--- Строка чека → движение (продажа −, возврат +).
+-- Строки чека → движения (продажа −, возврат +) одним оператором.
+-- Чек с кассы приходит одним INSERT всех строк — одно обновление на пару.
 CREATE FUNCTION trg_sale_item_movement() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE s record;
+DECLARE n bigint;
 BEGIN
-  SELECT tenant_id, store_id, type, created_at_local, cashier_id
-    INTO s FROM sales WHERE id = NEW.sale_id;
-  IF s.tenant_id IS DISTINCT FROM NEW.tenant_id THEN
-    RAISE EXCEPTION 'sale_items.tenant_id не совпадает с чеком' USING ERRCODE = 'check_violation';
-  END IF;
-
   INSERT INTO stock_movements (id, tenant_id, store_id, variant_id, qty, reason,
                                doc_id, doc_line_id, cost_price, occurred_at, created_by)
-  VALUES (uuid_v7(), NEW.tenant_id, s.store_id, NEW.variant_id,
-          CASE WHEN s.type = 'return' THEN NEW.qty ELSE -NEW.qty END,
-          s.type, NEW.sale_id, NEW.id, NEW.cost_price, s.created_at_local, s.cashier_id);
+  SELECT uuid_v7(), i.tenant_id, s.store_id, i.variant_id,
+         CASE WHEN s.type = 'return' THEN i.qty ELSE -i.qty END,
+         s.type, i.sale_id, i.id, i.cost_price, s.created_at_local, s.cashier_id
+  FROM new_items i
+  JOIN sales s ON s.id = i.sale_id AND s.tenant_id = i.tenant_id;
+
+  -- Строка, чей tenant_id не совпал с чеком, выпала бы из JOIN молча.
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n <> (SELECT count(*) FROM new_items) THEN
+    RAISE EXCEPTION 'sale_items.tenant_id не совпадает с чеком' USING ERRCODE = 'check_violation';
+  END IF;
   RETURN NULL;
 END $$;
 
 CREATE TRIGGER sale_item_movement AFTER INSERT ON sale_items
-  FOR EACH ROW EXECUTE FUNCTION trg_sale_item_movement();
+  REFERENCING NEW TABLE AS new_items
+  FOR EACH STATEMENT EXECUTE FUNCTION trg_sale_item_movement();
 
 -- Проведённый чек не правится: ошибка исправляется возвратом.
 CREATE TRIGGER forbid_change BEFORE UPDATE OR DELETE ON sale_items
@@ -443,11 +469,16 @@ CREATE TRIGGER forbid_change BEFORE DELETE ON sales
   FOR EACH ROW EXECUTE FUNCTION trg_forbid_change();
 
 -- Приход: статус только draft → accepted, назад нельзя.
+-- Принятую нельзя ни менять, ни удалять; черновик удалять можно.
 CREATE FUNCTION trg_purchase_status_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
   IF OLD.status = 'accepted' THEN
     RAISE EXCEPTION 'Принятую накладную менять нельзя' USING ERRCODE = 'restrict_violation';
+  END IF;
+  -- При DELETE записи NEW нет: возврат NEW (NULL) молча отменил бы удаление.
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
   END IF;
   IF NEW.status = 'accepted' AND NEW.accepted_at IS NULL THEN
     NEW.accepted_at := now();
@@ -458,22 +489,27 @@ END $$;
 CREATE TRIGGER purchase_status_guard BEFORE UPDATE OR DELETE ON purchases
   FOR EACH ROW EXECUTE FUNCTION trg_purchase_status_guard();
 
--- Остатки меняются только в момент accepted.
+-- Остатки меняются только в момент accepted. Все накладные, принятые одним
+-- UPDATE, дают один INSERT движений → одно обновление stock на пару.
+-- (UPDATE OF status с transition tables в Postgres запрещён, поэтому
+-- триггер на любой UPDATE, а переход draft → accepted ищется по OLD/NEW.)
 CREATE FUNCTION trg_purchase_accept() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   INSERT INTO stock_movements (id, tenant_id, store_id, variant_id, qty, reason,
                                doc_id, doc_line_id, cost_price, occurred_at, created_by)
-  SELECT uuid_v7(), pi.tenant_id, NEW.store_id, pi.variant_id, pi.qty, 'purchase',
-         NEW.id, pi.id, pi.cost_price, NEW.accepted_at, NEW.accepted_by
-  FROM purchase_items pi
-  WHERE pi.purchase_id = NEW.id;
+  SELECT uuid_v7(), pi.tenant_id, n.store_id, pi.variant_id, pi.qty, 'purchase',
+         n.id, pi.id, pi.cost_price, n.accepted_at, n.accepted_by
+  FROM new_purchases n
+  JOIN old_purchases o ON o.id = n.id
+  JOIN purchase_items pi ON pi.purchase_id = n.id
+  WHERE o.status = 'draft' AND n.status = 'accepted';
   RETURN NULL;
 END $$;
 
-CREATE TRIGGER purchase_accept AFTER UPDATE OF status ON purchases
-  FOR EACH ROW WHEN (OLD.status = 'draft' AND NEW.status = 'accepted')
-  EXECUTE FUNCTION trg_purchase_accept();
+CREATE TRIGGER purchase_accept AFTER UPDATE ON purchases
+  REFERENCING OLD TABLE AS old_purchases NEW TABLE AS new_purchases
+  FOR EACH STATEMENT EXECUTE FUNCTION trg_purchase_accept();
 
 -- Строки принятой накладной не меняются.
 CREATE FUNCTION trg_purchase_items_guard() RETURNS trigger
