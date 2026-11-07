@@ -132,6 +132,8 @@ public sealed class SalesService(ISalesStore store, ITenantContext tenant)
 
     public Task<SaleView?> GetSaleAsync(Guid saleId, CancellationToken ct) => store.GetSaleAsync(saleId, ct);
 
+    public Task<DeviceState> GetDeviceStateAsync(CancellationToken ct) => store.GetDeviceStateAsync(Context(), ct);
+
     /// <summary>Чек пробивает касса: филиал и касса — из токена, полученного по PIN на ней.</summary>
     private SaleContext Context()
     {

@@ -96,11 +96,14 @@ string[] queries = ["кроссовки runner", "кроссовки", "run"];
 
 // SQL — тот же, что в ProductCatalog / bench.sql.
 const string ScanSql = """
-    SELECT v.id, p.id, p.name, p.brand, p.article, v.size, v.color, v.barcode, v.unit, v.plu, v.sale_price,
+    SELECT v.id, p.id, p.name, p.brand, p.article, v.size, v.color, v.barcode, v.unit, v.plu,
+           coalesce(pli.sale_price, v.sale_price), v.sale_price, pli.price_list_id,
            coalesce(s.qty, 0), v.barcode IS DISTINCT FROM $1 AS by_plu
     FROM product_variants v
     JOIN products p ON p.id = v.product_id
     LEFT JOIN stock s ON s.tenant_id = v.tenant_id AND s.store_id = $2 AND s.variant_id = v.id
+    LEFT JOIN stores st ON st.id = $2
+    LEFT JOIN price_list_items pli ON pli.price_list_id = st.price_list_id AND pli.variant_id = v.id
     WHERE v.barcode = $1 AND v.deleted_at IS NULL AND p.deleted_at IS NULL
     """;
 const string SearchSql = """

@@ -14,7 +14,9 @@ namespace KassirERP.Infrastructure.Persistence;
 /// </summary>
 internal sealed class TenantDb(KassirDataSource dataSource, ITenantContext tenant)
 {
-    private const string SetTenantSql = "SELECT set_config('app.tenant_id', $1, true)";
+    // app.user_id — кто действует (журнал цен и другие аудиторские записи в базе);
+    // источник тот же — проверенный JWT.
+    private const string SetTenantSql = "SELECT set_config('app.tenant_id', $1, true), set_config('app.user_id', $2, true)";
 
     /// <summary>
     /// Чтение за один сетевой обмен: set_config и запросы уходят одним пакетом,
@@ -24,9 +26,10 @@ internal sealed class TenantDb(KassirDataSource dataSource, ITenantContext tenan
     public async Task<T> ReadAsync<T>(IReadOnlyList<NpgsqlBatchCommand> queries, Func<NpgsqlDataReader, Task<T>> read, CancellationToken ct)
     {
         var tenantId = tenant.TenantId; // без проверенного токена — исключение, а не пустой тенант
+        var userId = tenant.UserId;
         await using var connection = await dataSource.Inner.OpenConnectionAsync(ct);
         await using var batch = new NpgsqlBatch(connection);
-        batch.BatchCommands.Add(SetTenantCommand(tenantId));
+        batch.BatchCommands.Add(SetTenantCommand(tenantId, userId));
         foreach (var query in queries)
         {
             batch.BatchCommands.Add(query);
@@ -41,11 +44,12 @@ internal sealed class TenantDb(KassirDataSource dataSource, ITenantContext tenan
     public async Task<T> WriteAsync<T>(Func<NpgsqlConnection, NpgsqlTransaction, Task<T>> work, CancellationToken ct)
     {
         var tenantId = tenant.TenantId;
+        var userId = tenant.UserId;
         await using var connection = await dataSource.Inner.OpenConnectionAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
         await using (var batch = new NpgsqlBatch(connection, transaction))
         {
-            batch.BatchCommands.Add(SetTenantCommand(tenantId));
+            batch.BatchCommands.Add(SetTenantCommand(tenantId, userId));
             await batch.ExecuteNonQueryAsync(ct);
         }
 
@@ -54,6 +58,13 @@ internal sealed class TenantDb(KassirDataSource dataSource, ITenantContext tenan
         return result;
     }
 
-    private static NpgsqlBatchCommand SetTenantCommand(Guid tenantId) =>
-        new(SetTenantSql) { Parameters = { new NpgsqlParameter { Value = tenantId.ToString() } } };
+    private static NpgsqlBatchCommand SetTenantCommand(Guid tenantId, Guid userId) =>
+        new(SetTenantSql)
+        {
+            Parameters =
+            {
+                new NpgsqlParameter { Value = tenantId.ToString() },
+                new NpgsqlParameter { Value = userId.ToString() },
+            },
+        };
 }

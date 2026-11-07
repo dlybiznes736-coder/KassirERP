@@ -38,6 +38,38 @@ public sealed class SaleTests(KassirApiFactory factory)
         Assert.Equal(18.75m, await StockAsync(goods.WeightedProductId, goods.WeightedId));
     }
 
+    [Fact]
+    public async Task Sale_below_the_list_price_is_accepted_and_the_line_is_flagged()
+    {
+        var kassa = await NewKassaAsync();
+        var goods = await NewGoodsAsync();
+        var manager = (await _client.LoginAsync(_data.A, "manager")).AccessToken;
+        var list = Guid.NewGuid();
+        (await Send(HttpMethod.Post, "/price-lists", manager, new { id = list, name = $"Расхождение {list:N}" })).EnsureSuccessStatusCode();
+        (await Send(HttpMethod.Put, $"/price-lists/{list}/items", manager,
+            new { items = new[] { new { variantId = goods.ShoeId, salePrice = 5200.00m } } })).EnsureSuccessStatusCode();
+        (await Send(HttpMethod.Put, $"/stores/{_data.A.StoreId}/price-list", manager, new { priceListId = (Guid?)list })).EnsureSuccessStatusCode();
+        try
+        {
+            // Кроссовки по 4 990 при цене листа 5 200; колбаса по 520 — её в листе нет, базовая 520.
+            var response = await PostSale(kassa, Sale(kassa, [Piece(goods, 1), Weighted(goods, 1.000m)], [Pay("cash", 5510m)]));
+            var items = (await response.JsonAsync()).GetProperty("items").EnumerateArray().ToList();
+            var shoe = items.Single(i => i.GetProperty("variantId").GetGuid() == goods.ShoeId);
+            var kolbasa = items.Single(i => i.GetProperty("variantId").GetGuid() == goods.WeightedId);
+
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);   // чек принят
+            Assert.True(shoe.GetProperty("priceMismatch").GetBoolean());
+            Assert.Equal(5200.00m, shoe.GetProperty("listPrice").GetDecimal());
+            Assert.Equal(4990.00m, shoe.GetProperty("price").GetDecimal());
+            Assert.False(kolbasa.GetProperty("priceMismatch").GetBoolean());
+            Assert.Equal(520.00m, kolbasa.GetProperty("listPrice").GetDecimal());
+        }
+        finally
+        {
+            (await Send(HttpMethod.Put, $"/stores/{_data.A.StoreId}/price-list", manager, new { priceListId = (Guid?)null })).EnsureSuccessStatusCode();
+        }
+    }
+
     [Theory]
     [InlineData("cash")]
     [InlineData("card")]

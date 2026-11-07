@@ -36,6 +36,9 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy(PurchaseEndpoints.WritePolicy, policy => policy.RequireRole(Roles.CatalogWriters))
     // Смены и чеки — только с кассы: токен, полученный по PIN на зарегистрированной кассе.
     .AddPolicy(SalesEndpoints.DevicePolicy, policy => policy.RequireClaim(JwtClaims.DeviceId))
+    // Цены и лист филиала — владелец, администратор, менеджер (кладовщик заводит товар, но не цены).
+    .AddPolicy(PricingEndpoints.WritePolicy, policy => policy.RequireRole(Roles.Owner, Roles.Admin, Roles.Manager))
+    .AddPolicy(TransferEndpoints.WritePolicy, policy => policy.RequireRole(Roles.CatalogWriters))
     // Новую кассу подключает только менеджер, вошедший по паролю: с украденной
     // кассы (вход по PIN) выпустить ещё одну кассу нельзя.
     .AddPolicy(DeviceEndpoints.ManagePolicy, policy => policy
@@ -111,6 +114,8 @@ app.MapDeviceEndpoints();
 app.MapProductEndpoints();
 app.MapPurchaseEndpoints();
 app.MapSalesEndpoints();
+app.MapPricingEndpoints();
+app.MapTransferEndpoints();
 
 app.Run();
 

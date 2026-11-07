@@ -155,3 +155,40 @@ Content-Type: application/json
 ### 17. Отключить кассу — её токены перестают работать сразу
 POST {{api}}/devices/{{device.response.body.$.deviceId}}/revoke
 Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 18. Прайс-лист (id создаёт клиент)
+# @name pricelist
+POST {{api}}/price-lists
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "id": "{{$guid}}", "name": "Стенд: зона 1 {{$randomInt 1 99999}}" }
+
+### 19. Цена колбасы в листе — 540.00 за кг
+PUT {{api}}/price-lists/{{pricelist.response.body.$.id}}/items
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "items": [ { "variantId": "b0000000-0000-0000-0000-00000000be03", "salePrice": 540.00 } ] }
+
+### 20. Лист — «Филиалу 1» (филиал менеджера)
+PUT {{api}}/stores/{{manager.response.body.$.storeId}}/price-list
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "priceListId": "{{pricelist.response.body.$.id}}" }
+
+### 21. Скан весового в филиале с листом: 1.250 кг × 540 = 675.00 (базовая — 520)
+GET {{api}}/products/barcode/2201234012502
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 22. Журнал цен: кто, когда, было, стало
+GET {{api}}/price-changes?priceListId={{pricelist.response.body.$.id}}
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 23. Снять лист с филиала — снова базовые цены
+PUT {{api}}/stores/{{manager.response.body.$.storeId}}/price-list
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "priceListId": null }

@@ -14,11 +14,15 @@ internal sealed class ProductCatalog(TenantDb db) : IProductCatalog
 {
     private const string ScanColumns =
         """
-        SELECT v.id, p.id, p.name, p.brand, p.article, v.size, v.color, v.barcode, v.unit, v.plu, v.sale_price,
+        SELECT v.id, p.id, p.name, p.brand, p.article, v.size, v.color, v.barcode, v.unit, v.plu,
+               coalesce(pli.sale_price, v.sale_price), v.sale_price, pli.price_list_id,
                coalesce(s.qty, 0), v.barcode IS DISTINCT FROM $1 AS by_plu
         FROM product_variants v
         JOIN products p ON p.id = v.product_id
         LEFT JOIN stock s ON s.tenant_id = v.tenant_id AND s.store_id = $2 AND s.variant_id = v.id
+        -- Цена листа филиала (миграция 0008): два поиска по первичному ключу.
+        LEFT JOIN stores st ON st.id = $2
+        LEFT JOIN price_list_items pli ON pli.price_list_id = st.price_list_id AND pli.variant_id = v.id
 
         """;
 
@@ -47,9 +51,12 @@ internal sealed class ProductCatalog(TenantDb db) : IProductCatalog
     // Пары читаются уже под RLS, как обычно.
     private const string SearchSql =
         """
-        SELECT p.id, p.name, p.brand, p.article, v.id, v.size, v.color, v.barcode, v.unit, v.sale_price
+        SELECT p.id, p.name, p.brand, p.article, v.id, v.size, v.color, v.barcode, v.unit,
+               coalesce(pli.sale_price, v.sale_price)
         FROM catalog.search_products($1, $2) p
         JOIN product_variants v ON v.product_id = p.id AND v.deleted_at IS NULL
+        LEFT JOIN stores st ON st.id = $3
+        LEFT JOIN price_list_items pli ON pli.price_list_id = st.price_list_id AND pli.variant_id = v.id
         ORDER BY p.name, p.id, v.size, v.color
         """;
 
@@ -58,9 +65,12 @@ internal sealed class ProductCatalog(TenantDb db) : IProductCatalog
 
     private const string VariantsSql =
         """
-        SELECT v.id, v.size, v.color, v.barcode, v.unit, v.plu, v.tracks_expiry, v.sale_price, s.qty
+        SELECT v.id, v.size, v.color, v.barcode, v.unit, v.plu, v.tracks_expiry,
+               coalesce(pli.sale_price, v.sale_price), v.sale_price, pli.price_list_id, s.qty
         FROM product_variants v
         LEFT JOIN stock s ON s.tenant_id = v.tenant_id AND s.store_id = $2 AND s.variant_id = v.id
+        LEFT JOIN stores st ON st.id = $2
+        LEFT JOIN price_list_items pli ON pli.price_list_id = st.price_list_id AND pli.variant_id = v.id
         WHERE v.product_id = $1 AND v.deleted_at IS NULL
         ORDER BY v.size, v.color
         """;
@@ -96,12 +106,13 @@ internal sealed class ProductCatalog(TenantDb db) : IProductCatalog
             return new ScanMatch(
                 reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), NullableString(reader, 3), NullableString(reader, 4),
                 NullableString(reader, 5), NullableString(reader, 6), NullableString(reader, 7), reader.GetString(8), NullableString(reader, 9),
-                reader.GetDecimal(10), reader.GetDecimal(11), reader.GetBoolean(12));
+                reader.GetDecimal(10), reader.GetDecimal(11), reader.IsDBNull(12) ? null : reader.GetGuid(12),
+                reader.GetDecimal(13), reader.GetBoolean(14));
         }, ct);
     }
 
-    public Task<IReadOnlyList<SearchProductView>> SearchByNameAsync(string query, int limit, CancellationToken ct) =>
-        db.ReadAsync<IReadOnlyList<SearchProductView>>([Command(SearchSql, query, limit)], async reader =>
+    public Task<IReadOnlyList<SearchProductView>> SearchByNameAsync(string query, int limit, Guid? storeId, CancellationToken ct) =>
+        db.ReadAsync<IReadOnlyList<SearchProductView>>([Command(SearchSql, query, limit, (object?)storeId ?? DBNull.Value)], async reader =>
         {
             var products = new List<SearchProductView>();
             List<SearchVariantView>? variants = null;
@@ -141,9 +152,10 @@ internal sealed class ProductCatalog(TenantDb db) : IProductCatalog
             var variants = new List<VariantView>();
             while (await reader.ReadAsync(ct))
             {
-                decimal? stock = storeId is null ? null : reader.IsDBNull(8) ? 0m : reader.GetDecimal(8);
+                decimal? stock = storeId is null ? null : reader.IsDBNull(10) ? 0m : reader.GetDecimal(10);
                 variants.Add(new VariantView(reader.GetGuid(0), NullableString(reader, 1), NullableString(reader, 2), NullableString(reader, 3),
-                    reader.GetString(4), NullableString(reader, 5), reader.GetBoolean(6), reader.GetDecimal(7), stock));
+                    reader.GetString(4), NullableString(reader, 5), reader.GetBoolean(6), reader.GetDecimal(7), reader.GetDecimal(8),
+                    reader.IsDBNull(9) ? null : reader.GetGuid(9), stock));
             }
 
             return new ProductView(id, categoryId, name, brand, article, variants);

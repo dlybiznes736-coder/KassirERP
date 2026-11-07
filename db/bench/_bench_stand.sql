@@ -10,6 +10,8 @@
 --   выдаёт коды подключения касс, принимает товар;
 -- - у всех кассиров основного тенанта (cashier1_1, cashier1_2, … — филиал 1,
 --   cashier2_1 … — филиал 2) PIN 1234;
+-- - стендовая касса в филиале 1: id b0000000-0000-0000-0000-00000000be05,
+--   секрет bench-device-secret-1 (замер чеков переиспользует её);
 -- - весовой товар «Колбаса докторская (стенд)», PLU 01234, 520.00 за кг,
 --   остаток 50 кг в филиале 1: штрихкод 2201234012502 = 1.250 кг.
 -- Хеши — PBKDF2-SHA512 (210 000 итераций) с фиксированной солью в формате
@@ -42,3 +44,10 @@ SELECT 'b0000000-0000-0000-0000-00000000be04', :'tenant', s.id, 'b0000000-0000-0
        'b0000000-0000-0000-0000-00000000be04', now()
 FROM stores s WHERE s.tenant_id = :'tenant' AND s.name = 'Филиал 1'
 ON CONFLICT DO NOTHING;
+
+-- Стендовая касса: секрет известен, в базе — SHA-256 (как после регистрации по коду).
+INSERT INTO devices (id, tenant_id, store_id, name, secret_hash)
+SELECT 'b0000000-0000-0000-0000-00000000be05', :'tenant', s.id, 'Стендовая касса',
+       '4497b5c4a317885433fe7abb616f9f12c0a018ca3d8f2637841dfa9bf93e3aae'
+FROM stores s WHERE s.tenant_id = :'tenant' AND s.name = 'Филиал 1'
+ON CONFLICT (id) DO UPDATE SET revoked_at = NULL, secret_hash = EXCLUDED.secret_hash;

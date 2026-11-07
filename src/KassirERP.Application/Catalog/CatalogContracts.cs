@@ -6,24 +6,33 @@ public static class Units
     public const string Kilogram = "kg";
 }
 
-/// <summary>Пара в ответе. Stock — остаток в филиале из токена (null, если филиала в токене нет).</summary>
+/// <summary>
+/// Пара в ответе. SalePrice — цена для филиала из токена: цена его прайс-листа,
+/// если она есть, иначе базовая (BasePrice). Stock — остаток в этом филиале
+/// (null, если филиала в токене нет).
+/// </summary>
 public sealed record VariantView(
-    Guid Id, string? Size, string? Color, string? Barcode, string Unit, string? Plu, bool TracksExpiry, decimal SalePrice, decimal? Stock);
+    Guid Id, string? Size, string? Color, string? Barcode, string Unit, string? Plu, bool TracksExpiry,
+    decimal SalePrice, decimal BasePrice, Guid? PriceListId, decimal? Stock);
 
 public sealed record ProductView(Guid Id, Guid? CategoryId, string Name, string? Brand, string? Article, IReadOnlyList<VariantView> Variants);
 
 /// <summary>
 /// Результат скана. Quantity — штуки (1) или вес из весового штрихкода в кг;
-/// SalePrice — за штуку или за кг; LineTotal = round(SalePrice × Quantity, 2).
+/// SalePrice — цена листа филиала из токена (или базовая, если в листе её нет),
+/// за штуку или за кг; LineTotal = round(SalePrice × Quantity, 2).
+/// PriceListId — лист, из которого цена; null — базовая цена.
 /// </summary>
 public sealed record ScanView(
     Guid VariantId, Guid ProductId, string Name, string? Brand, string? Article,
     string? Size, string? Color, string? Barcode, string Unit, string? Plu,
-    decimal SalePrice, decimal Quantity, decimal LineTotal, decimal Stock, string ScannedCode);
+    decimal SalePrice, decimal BasePrice, Guid? PriceListId,
+    decimal Quantity, decimal LineTotal, decimal Stock, string ScannedCode);
 
 /// <summary>Строка поиска: товар и все его пары (без остатков — как в bench.sql).</summary>
 public sealed record SearchProductView(Guid Id, string Name, string? Brand, string? Article, IReadOnlyList<SearchVariantView> Variants);
 
+/// <summary>SalePrice — цена листа филиала из токена или базовая.</summary>
 public sealed record SearchVariantView(Guid Id, string? Size, string? Color, string? Barcode, string Unit, decimal SalePrice);
 
 // id приходят с клиента (принцип 1 ТЗ). tenant_id в командах нет и быть не может.
@@ -37,7 +46,8 @@ public sealed record NewProduct(Guid Id, Guid? CategoryId, string Name, string? 
 /// <summary>Пара, найденная сканом (по штрихкоду или по PLU весового кода).</summary>
 public sealed record ScanMatch(
     Guid VariantId, Guid ProductId, string Name, string? Brand, string? Article,
-    string? Size, string? Color, string? Barcode, string Unit, string? Plu, decimal SalePrice, decimal Stock, bool ByPlu);
+    string? Size, string? Color, string? Barcode, string Unit, string? Plu,
+    decimal SalePrice, decimal BasePrice, Guid? PriceListId, decimal Stock, bool ByPlu);
 
 public enum WriteStatus
 {
@@ -61,7 +71,7 @@ public interface IProductCatalog
     Task<ScanMatch?> FindByBarcodeAsync(string barcode, WeightBarcode? weight, Guid storeId, CancellationToken ct);
 
     /// <summary>До limit товаров, чьё название содержит query (буквально, без шаблонов), со всеми парами.</summary>
-    Task<IReadOnlyList<SearchProductView>> SearchByNameAsync(string query, int limit, CancellationToken ct);
+    Task<IReadOnlyList<SearchProductView>> SearchByNameAsync(string query, int limit, Guid? storeId, CancellationToken ct);
 
     Task<ProductView?> GetAsync(Guid productId, Guid? storeId, CancellationToken ct);
     Task<WriteResult> CreateAsync(NewProduct product, CancellationToken ct);

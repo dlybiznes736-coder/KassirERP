@@ -28,7 +28,7 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
 
     private const string SaleItemsSql =
         """
-        SELECT id, variant_id, unit, qty, price, discount, total, scanned_code, return_of_item_id
+        SELECT id, variant_id, unit, qty, price, discount, total, scanned_code, return_of_item_id, list_price, price_mismatch
         FROM sale_items WHERE sale_id = $1 ORDER BY id
         """;
 
@@ -133,7 +133,7 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
 
             var built = sale.Type == SaleTypes.Return
                 ? await BuildReturnLinesAsync(connection, tx, sale, ct)
-                : await BuildSaleLinesAsync(connection, tx, sale, ct);
+                : await BuildSaleLinesAsync(connection, tx, sale, context.StoreId, ct);
             if (built.Error is { } error)
             {
                 return error;
@@ -193,25 +193,60 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
         db.ReadAsync([Batch(SaleSql, saleId), Batch(SaleItemsSql, saleId), Batch(PaymentsSql, saleId)],
             reader => ReadSaleDocumentAsync(reader, ct), ct);
 
+    public Task<DeviceState> GetDeviceStateAsync(SaleContext context, CancellationToken ct) =>
+        db.ReadAsync(
+            [
+                new NpgsqlBatchCommand("SELECT coalesce(max(local_number), 0) FROM sales WHERE device_id = $1")
+                {
+                    Parameters = { new NpgsqlParameter { Value = context.DeviceId } },
+                },
+                new NpgsqlBatchCommand(ShiftSql.Replace("WHERE id = $1", "WHERE device_id = $1 AND status = 'open'"))
+                {
+                    Parameters = { new NpgsqlParameter { Value = context.DeviceId } },
+                },
+            ],
+            async reader =>
+            {
+                await reader.ReadAsync(ct);
+                var last = reader.GetInt32(0);
+                await reader.NextResultAsync(ct);
+                var open = await reader.ReadAsync(ct) ? ReadShift(reader) : null;
+                return new DeviceState(context.DeviceId, context.StoreId, last, open);
+            }, ct);
+
     // -----------------------------------------------------------------------
 
     private sealed record Line(Guid Id, Guid VariantId, string Unit, decimal Qty, decimal Price, decimal Discount,
-        decimal CostPrice, string? ScannedCode, Guid? ReturnOfItemId);
+        decimal CostPrice, string? ScannedCode, Guid? ReturnOfItemId, decimal? ListPrice = null)
+    {
+        public bool PriceMismatch => ListPrice is { } list && list != Price;
+    }
 
     private sealed record Built(List<Line>? Lines, SaleResult? Error);
 
-    /// <summary>Продажа: цена и скидка — с кассы; единица и себестоимость — из пары (копируются в чек).</summary>
-    private static async Task<Built> BuildSaleLinesAsync(NpgsqlConnection connection, NpgsqlTransaction tx, NewSale sale, CancellationToken ct)
+    /// <summary>
+    /// Продажа: цена и скидка — с кассы (её видел покупатель; касса могла работать
+    /// без связи); единица и себестоимость — из пары (копируются в чек). Цена листа
+    /// филиала (или базовая) — для пометки расхождения, чек принимается в любом случае.
+    /// </summary>
+    private static async Task<Built> BuildSaleLinesAsync(NpgsqlConnection connection, NpgsqlTransaction tx, NewSale sale, Guid storeId, CancellationToken ct)
     {
-        var variants = new Dictionary<Guid, (string Unit, decimal Cost)>();
+        var variants = new Dictionary<Guid, (string Unit, decimal Cost, decimal ListPrice)>();
         await using (var command = new NpgsqlCommand(
-            "SELECT id, unit, cost_price FROM product_variants WHERE id = ANY($1) AND deleted_at IS NULL", connection, tx))
+            """
+            SELECT v.id, v.unit, v.cost_price, coalesce(pli.sale_price, v.sale_price)
+            FROM product_variants v
+            LEFT JOIN stores st ON st.id = $2
+            LEFT JOIN price_list_items pli ON pli.price_list_id = st.price_list_id AND pli.variant_id = v.id
+            WHERE v.id = ANY($1) AND v.deleted_at IS NULL
+            """, connection, tx))
         {
             command.Parameters.Add(new NpgsqlParameter { Value = sale.Items.Select(i => i.VariantId!.Value).Distinct().ToArray() });
+            command.Parameters.Add(new NpgsqlParameter { Value = storeId });
             await using var reader = await command.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
-                variants[reader.GetGuid(0)] = (reader.GetString(1), reader.GetDecimal(2));
+                variants[reader.GetGuid(0)] = (reader.GetString(1), reader.GetDecimal(2), reader.GetDecimal(3));
             }
         }
 
@@ -229,7 +264,7 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
             }
 
             lines.Add(new Line(item.Id, item.VariantId.Value, variant.Unit, item.Qty, item.Price!.Value, item.Discount,
-                variant.Cost, item.ScannedCode, null));
+                variant.Cost, item.ScannedCode, null, variant.ListPrice));
         }
 
         return new Built(lines, null);
@@ -332,11 +367,12 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
         await using var insert = new NpgsqlCommand(
             """
             INSERT INTO sale_items (id, tenant_id, sale_id, variant_id, return_of_item_id, qty, price, cost_price,
-                                    discount, total, unit, scanned_code)
+                                    discount, total, unit, scanned_code, list_price, price_mismatch)
             SELECT u.id, current_tenant_id(), $1, u.variant_id, u.return_of, u.qty, u.price, u.cost, u.discount,
-                   round(u.price * u.qty, 2) - u.discount, u.unit, u.code
+                   round(u.price * u.qty, 2) - u.discount, u.unit, u.code, u.list_price, u.mismatch
             FROM unnest($2::uuid[], $3::uuid[], $4::uuid[], $5::numeric[], $6::numeric[], $7::numeric[], $8::numeric[],
-                        $9::text[], $10::text[]) AS u(id, variant_id, return_of, qty, price, cost, discount, unit, code)
+                        $9::text[], $10::text[], $11::numeric[], $12::boolean[])
+                 AS u(id, variant_id, return_of, qty, price, cost, discount, unit, code, list_price, mismatch)
             """, connection, tx);
         insert.Parameters.Add(new NpgsqlParameter { Value = saleId });
         insert.Parameters.Add(new NpgsqlParameter { Value = lines.Select(l => l.Id).ToArray() });
@@ -356,6 +392,12 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
             Value = lines.Select(l => l.ScannedCode).ToArray(),
             NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Text,
         });
+        insert.Parameters.Add(new NpgsqlParameter
+        {
+            Value = lines.Select(l => l.ListPrice).ToArray(),
+            NpgsqlDbType = NpgsqlDbType.Array | NpgsqlDbType.Numeric,
+        });
+        insert.Parameters.Add(new NpgsqlParameter { Value = lines.Select(l => l.PriceMismatch).ToArray() });
         await insert.ExecuteNonQueryAsync(ct);
     }
 
@@ -419,7 +461,7 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
         {
             items.Add(new SaleItemView(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetDecimal(3), reader.GetDecimal(4),
                 reader.GetDecimal(5), reader.GetDecimal(6), reader.IsDBNull(7) ? null : reader.GetString(7),
-                reader.IsDBNull(8) ? null : reader.GetGuid(8)));
+                reader.IsDBNull(8) ? null : reader.GetGuid(8), reader.IsDBNull(9) ? null : reader.GetDecimal(9), reader.GetBoolean(10)));
         }
 
         await reader.NextResultAsync(ct);

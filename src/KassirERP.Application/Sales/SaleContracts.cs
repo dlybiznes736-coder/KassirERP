@@ -49,9 +49,14 @@ public sealed record NewSale(
     IReadOnlyList<NewSaleItem> Items, IReadOnlyList<NewPayment> Payments,
     string Type = SaleTypes.Sale, Guid? ReturnOfSaleId = null, Guid? CustomerId = null);
 
+/// <summary>
+/// ListPrice — цена листа филиала (или базовая) на момент приёма чека;
+/// PriceMismatch — касса пробила другую цену. Чек при этом принят.
+/// У строк возврата ListPrice = null: цена берётся из исходного чека.
+/// </summary>
 public sealed record SaleItemView(
     Guid Id, Guid VariantId, string Unit, decimal Qty, decimal Price, decimal Discount, decimal Total,
-    string? ScannedCode, Guid? ReturnOfItemId);
+    string? ScannedCode, Guid? ReturnOfItemId, decimal? ListPrice, bool PriceMismatch);
 
 public sealed record PaymentView(Guid Id, string Method, decimal Amount);
 
@@ -76,6 +81,12 @@ public enum SaleStatus
     ReturnExceedsSold,
 }
 
+/// <summary>
+/// Состояние кассы на сервере: открытая смена и последний номер чека. Нужно кассе
+/// после переустановки или сбоя, чтобы продолжить нумерацию и не открыть вторую смену.
+/// </summary>
+public sealed record DeviceState(Guid DeviceId, Guid StoreId, int LastLocalNumber, ShiftView? OpenShift);
+
 public sealed record SaleResult(SaleStatus Status, string? Detail = null, SaleView? Sale = null, ShiftView? Shift = null);
 
 /// <summary>Кто пробивает чек — только из токена кассы.</summary>
@@ -89,6 +100,7 @@ public interface ISalesStore
     Task<ShiftView?> GetShiftAsync(Guid shiftId, CancellationToken ct);
     Task<SaleResult> CreateSaleAsync(NewSale sale, SaleContext context, CancellationToken ct);
     Task<SaleView?> GetSaleAsync(Guid saleId, CancellationToken ct);
+    Task<DeviceState> GetDeviceStateAsync(SaleContext context, CancellationToken ct);
 }
 
 /// <summary>Деньги чека — в одном месте. Округление до тыйына, от нуля.</summary>

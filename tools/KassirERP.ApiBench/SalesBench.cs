@@ -7,16 +7,18 @@ using System.Text.Json;
 
 /// <summary>
 /// Время проведения чека через API (шаг 5). Всё — через API, как касса:
-/// менеджер стенда выдаёт код, касса регистрируется, кассир входит по PIN,
-/// открывает смену; затем чеки (пара обуви + весовая колбаса, наличные + карта)
-/// и возвраты (часть колбасы). Меряется только POST /sales: пары подобраны
-/// сканом заранее. Один клиент, запросы подряд. В конце смена закрывается.
+/// стендовая касса (одна и та же при каждом запуске) входит кассиром по PIN,
+/// узнаёт своё состояние (GET /devices/me): закрывает смену, если она осталась
+/// открытой, и продолжает нумерацию чеков; открывает смену; затем чеки (пара
+/// обуви + весовая колбаса, наличные + карта) и возвраты (часть колбасы).
+/// Меряется только POST /sales: пары подобраны сканом заранее. Один клиент,
+/// запросы подряд. В конце смена закрывается.
 /// Нужен стенд генератора (db/bench/_bench_stand.sql).
 /// </summary>
 internal static class SalesBench
 {
-    private const string Manager = "bench";
-    private const string ManagerPassword = "bench-password-1";
+    private const string StandDevice = "b0000000-0000-0000-0000-00000000be05";
+    private const string StandDeviceSecret = "bench-device-secret-1";
     private const string Cashier = "cashier1_1";
     private const string CashierPin = "1234";
     private static readonly Guid Kolbasa = Guid.Parse("b0000000-0000-0000-0000-00000000be03");
@@ -25,12 +27,17 @@ internal static class SalesBench
     {
         using var http = new HttpClient { BaseAddress = new Uri(api) };
 
-        var manager = await Json(await http.PostAsJsonAsync("/auth/login", new { tenantCode = "bench", login = Manager, password = ManagerPassword }));
-        var code = await Json(await Send(http, HttpMethod.Post, "/devices/enrollment-codes", manager.GetProperty("accessToken").GetString()!, new { }));
-        var device = await Json(await http.PostAsJsonAsync("/devices/enroll", new { code = code.GetProperty("code").GetString(), name = "Замер чеков" }));
         var pin = new HttpRequestMessage(HttpMethod.Post, "/auth/pin") { Content = JsonContent.Create(new { login = Cashier, pin = CashierPin }) };
-        pin.Headers.Authorization = new AuthenticationHeaderValue("Device", $"{device.GetProperty("deviceId")}.{device.GetProperty("deviceSecret").GetString()}");
+        pin.Headers.Authorization = new AuthenticationHeaderValue("Device", $"{StandDevice}.{StandDeviceSecret}");
         var token = (await Json(await http.SendAsync(pin))).GetProperty("accessToken").GetString()!;
+
+        // Касса та же, что в прошлый раз: продолжаем нумерацию, незакрытую смену закрываем.
+        var state = await Json(await Send(http, HttpMethod.Get, "/devices/me", token, null));
+        if (state.GetProperty("openShift").ValueKind == JsonValueKind.Object)
+        {
+            await Json(await Send(http, HttpMethod.Post, $"/shifts/{state.GetProperty("openShift").GetProperty("id").GetGuid()}/close", token, new { closingCash = 0m }));
+        }
+
         var shiftId = Guid.NewGuid();
         await Json(await Send(http, HttpMethod.Post, "/shifts", token, new { id = shiftId, openingCash = 0m }));
 
@@ -49,7 +56,8 @@ internal static class SalesBench
             }
         }
 
-        var number = 0;
+        var number = state.GetProperty("lastLocalNumber").GetInt32();
+        var firstNumber = number + 1;
         var saleTimes = new List<double>();
         var posted = new List<(Guid Sale, Guid KolbasaLine, decimal Kg)>();
         for (var i = 0; i < sales + warmup; i++)
@@ -107,6 +115,7 @@ internal static class SalesBench
         md.AppendLine();
         md.AppendLine(
             string.Create(CultureInfo.InvariantCulture, $"Дата: {DateTime.Now:yyyy-MM-dd HH:mm} · API {api} · один клиент, запросы подряд, разогрев {warmup} чеков. ") +
+            "Стендовая касса (одна при каждом запуске), чеки " + firstNumber.ToString(CultureInfo.InvariantCulture) + "–" + number.ToString(CultureInfo.InvariantCulture) + ". " +
             "Чек: пара обуви (шт) + весовая колбаса (кг), оплата наличными и картой. Возврат: половина колбасы из чека, наличными. " +
             "Время — от отправки POST /sales до последнего байта ответа (проверки, запись чека, оплат и строк, триггер склада, COMMIT с fsync).");
         md.AppendLine();

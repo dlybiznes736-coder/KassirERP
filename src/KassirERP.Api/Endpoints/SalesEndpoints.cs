@@ -20,6 +20,10 @@ internal static class SalesEndpoints
         shifts.MapGet("/{id:guid}", async (Guid id, SalesService service, CancellationToken ct) =>
             await service.GetShiftAsync(id, ct) is { } shift ? Results.Ok(shift) : Results.Problem(statusCode: 404, title: "Смена не найдена"));
 
+        // Касса после переустановки или сбоя: открытая смена и последний номер чека.
+        app.MapGet("/devices/me", async (SalesService service, CancellationToken ct) => Results.Ok(await service.GetDeviceStateAsync(ct)))
+            .WithTags("Кассы").RequireAuthorization(DevicePolicy);
+
         var sales = app.MapGroup("/sales").WithTags("Чеки");
 
         // Чек или возврат (type = "return"). Повтор того же чека — 200, не дубль.

@@ -2,14 +2,18 @@ using KassirERP.Application.Abstractions;
 using KassirERP.Application.Auth;
 using KassirERP.Application.Catalog;
 using KassirERP.Application.Devices;
+using KassirERP.Application.Pricing;
 using KassirERP.Application.Purchases;
 using KassirERP.Application.Sales;
+using KassirERP.Application.Transfers;
 using KassirERP.Infrastructure.Auth;
 using KassirERP.Infrastructure.Catalog;
 using KassirERP.Infrastructure.Devices;
 using KassirERP.Infrastructure.Persistence;
+using KassirERP.Infrastructure.Pricing;
 using KassirERP.Infrastructure.Purchases;
 using KassirERP.Infrastructure.Sales;
+using KassirERP.Infrastructure.Transfers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -67,6 +71,8 @@ public static class DependencyInjection
         services.AddScoped<IProductCatalog, ProductCatalog>();
         services.AddScoped<IPurchaseStore, PurchaseStore>();
         services.AddScoped<ISalesStore, SalesStore>();
+        services.AddScoped<IPriceListStore, PriceListStore>();
+        services.AddScoped<ITransferStore, TransferStore>();
 
         services.AddHealthChecks()
             .AddCheck<PostgresHealthCheck>("postgres", tags: [HealthTags.Ready], timeout: TimeSpan.FromSeconds(3));

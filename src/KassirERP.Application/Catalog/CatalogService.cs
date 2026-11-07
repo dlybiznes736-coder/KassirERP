@@ -36,7 +36,7 @@ public sealed class CatalogService(IProductCatalog catalog, ITenantContext tenan
         return new ScanView(
             match.VariantId, match.ProductId, match.Name, match.Brand, match.Article,
             match.Size, match.Color, match.Barcode, match.Unit, match.Plu,
-            match.SalePrice, quantity, lineTotal, match.Stock, code);
+            match.SalePrice, match.BasePrice, match.PriceListId, quantity, lineTotal, match.Stock, code);
     }
 
     /// <summary>
@@ -55,7 +55,7 @@ public sealed class CatalogService(IProductCatalog catalog, ITenantContext tenan
             throw new CatalogValidationException("Поиск: от 3 до 100 символов.");
         }
 
-        return catalog.SearchByNameAsync(q, SearchLimit, ct);
+        return catalog.SearchByNameAsync(q, SearchLimit, tenant.StoreId, ct);
     }
 
     public Task<ProductView?> GetAsync(Guid productId, CancellationToken ct) =>
