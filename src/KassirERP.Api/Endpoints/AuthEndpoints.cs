@@ -64,7 +64,8 @@ internal static class AuthEndpoints
             result.Subject!.UserId, result.Subject.TenantId, result.Subject.StoreId, result.Subject.Role, result.Subject.DeviceId)),
         LoginStatus.LockedOut => new RetryAfterResult(result.RetryAfter),
         LoginStatus.InvalidDevice => Results.Problem(statusCode: 401, title: "Касса не зарегистрирована или отключена"),
-        LoginStatus.StoreMismatch => Results.Problem(statusCode: 403, title: "Кассир не работает в филиале этой кассы"),
+        LoginStatus.StoreMismatch => Results.Problem(statusCode: 403, title: "Кассиру не открыт доступ к филиалу этой кассы",
+            detail: "Доступ к филиалам — явный список; без назначенных филиалов вход запрещён."),
         LoginStatus.InvalidStore => Results.Problem(statusCode: 400, title: "Филиал недоступен"),
         // Один ответ на «нет фирмы», «нет логина» и «неверный пароль»: не подсказываем, что из этого верно.
         _ => Results.Problem(statusCode: 401, title: "Неверный логин, пароль или PIN"),

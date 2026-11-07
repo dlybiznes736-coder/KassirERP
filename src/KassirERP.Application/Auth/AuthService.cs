@@ -9,7 +9,7 @@ public enum LoginStatus
     LockedOut,
     /// <summary>Касса неизвестна, отключена или её секрет неверен.</summary>
     InvalidDevice,
-    /// <summary>Кассир привязан к другому филиалу, не к филиалу кассы.</summary>
+    /// <summary>Филиала кассы нет в списке доступа кассира (или список пуст).</summary>
     StoreMismatch,
     /// <summary>Выбранный филиал не принадлежит фирме или недоступен пользователю.</summary>
     InvalidStore,
@@ -72,7 +72,9 @@ public sealed class AuthService(IAuthStore store, IPasswordHasher hasher, IToken
             return checkedUser;
         }
 
-        if (user!.StoreId is { } userStore && userStore != device.StoreId)
+        // Доступ к филиалам — явный список (user_stores). Пустой список — вход
+        // запрещён: «без привязки» больше не значит «все филиалы».
+        if (!await store.UserHasStoreAsync(user!.UserId, device.StoreId, ct))
         {
             return new(LoginStatus.StoreMismatch);
         }

@@ -75,7 +75,7 @@ public sealed class TinyAuthRateLimitTests(TinyRateLimitFactory factory) : IClas
         // Касса 1 исчерпала свой лимит. Касса 2 с того же IP — входит.
         var kassa1 = _data.B.Devices["kassa1"];
         var kassa2 = _data.B.Devices["kassa2"];
-        var user = _data.B.Users["nostore"];
+        var user = _data.B.Users["multi"];   // доступ к филиалам 1 и 2
 
         var spent = new List<HttpStatusCode>();
         for (var i = 0; i < TinyRateLimitFactory.PinLimit; i++)

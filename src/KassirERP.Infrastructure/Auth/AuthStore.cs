@@ -72,6 +72,14 @@ internal sealed class AuthStore(KassirDataSource dataSource) : IAuthStore
         return (bool)(await command.ExecuteScalarAsync(ct))!;
     }
 
+    public async Task<bool> UserHasStoreAsync(Guid userId, Guid storeId, CancellationToken ct)
+    {
+        await using var command = dataSource.Inner.CreateCommand("SELECT auth.user_has_store($1, $2)");
+        command.Parameters.Add(new NpgsqlParameter { Value = userId });
+        command.Parameters.Add(new NpgsqlParameter { Value = storeId });
+        return (bool)(await command.ExecuteScalarAsync(ct))!;
+    }
+
     private async Task<UserCredentials?> ReadUserAsync(string sql, object key, string login, CancellationToken ct)
     {
         await using var command = dataSource.Inner.CreateCommand(sql);

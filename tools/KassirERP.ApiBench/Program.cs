@@ -17,6 +17,7 @@
 // Запуск (API уже работает в Release, см. db/bench/API_REPORT.md):
 //   dotnet run -c Release --project tools/KassirERP.ApiBench -- --out db/bench/API_REPORT.md
 //   ... -- --app-cs "Host=...;Database=kassir_x3;..." --out x3.md   (другая база)
+//   ... -- --mode sales --sales 1000 --returns 200 --out sales.md     (проведение чека, SalesBench)
 // =====================================================================
 using System.Diagnostics;
 using System.Globalization;
@@ -27,6 +28,17 @@ using System.Text.Json;
 using Npgsql;
 
 var api = Arg("--api", "http://localhost:5260");
+
+// Режим «чеки»: время проведения чека и возврата (шаг 5), см. SalesBench.
+if (Arg("--mode", "read") == "sales")
+{
+    await SalesBench.RunAsync(api,
+        int.Parse(Arg("--sales", "1000"), CultureInfo.InvariantCulture),
+        int.Parse(Arg("--returns", "200"), CultureInfo.InvariantCulture),
+        Arg("--out", "SALES_REPORT.md"));
+    return;
+}
+
 var appCs = Arg("--app-cs", "Host=localhost;Port=15432;Database=kassir;Username=kassir_app;Password=kassir_app_dev");
 var outPath = Arg("--out", "API_REPORT.md");
 var scans = int.Parse(Arg("--scans", "2000"), CultureInfo.InvariantCulture);

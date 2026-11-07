@@ -62,17 +62,33 @@ public sealed class AuthTests(KassirApiFactory factory)
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    // Было: «PIN-вход требует филиал у кассира». Теперь филиал даёт касса:
-    // кассир без привязки входит на кассе любого филиала своей фирмы.
+    // Доступ кассира к филиалам — явный список (user_stores). Без филиалов вход
+    // запрещён: «без привязки» больше не значит «все филиалы».
     [Fact]
-    public async Task Pin_login_takes_store_from_the_device()
+    public async Task Cashier_without_stores_cannot_log_in()
     {
         var user = _data.A.Users["nostore"];
 
-        var response = await _client.PinAsync(_data.A.Devices["kassa2"], user.Login, user.Pin!);
+        var kassa1 = await _client.PinAsync(_data.A.Devices["kassa1"], user.Login, user.Pin!);
+        var kassa2 = await _client.PinAsync(_data.A.Devices["kassa2"], user.Login, user.Pin!);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(_data.A.Store2Id, (await response.JsonAsync()).GetProperty("storeId").GetGuid());
+        Assert.Equal(HttpStatusCode.Forbidden, kassa1.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, kassa2.StatusCode);
+    }
+
+    [Fact]
+    public async Task Cashier_with_stores_1_and_2_logs_in_only_there_not_on_store_3()
+    {
+        var user = _data.A.Users["multi"];
+
+        var store1 = await _client.PinAsync(_data.A.Devices["kassa1"], user.Login, user.Pin!);
+        var store2 = await _client.PinAsync(_data.A.Devices["kassa2"], user.Login, user.Pin!);
+        var store3 = await _client.PinAsync(_data.A.Devices["kassa3"], user.Login, user.Pin!);
+
+        Assert.Equal(HttpStatusCode.OK, store1.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, store2.StatusCode);
+        Assert.Equal(_data.A.Store2Id, (await store2.JsonAsync()).GetProperty("storeId").GetGuid());
+        Assert.Equal(HttpStatusCode.Forbidden, store3.StatusCode);
     }
 
     [Fact]

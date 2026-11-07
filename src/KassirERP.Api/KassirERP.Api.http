@@ -85,6 +85,73 @@ Content-Type: application/json
 GET {{api}}/products/b0000000-0000-0000-0000-00000000be02
 Authorization: Bearer {{manager.response.body.$.accessToken}}
 
-### 12. Отключить кассу — её токены перестают работать сразу
+### 12. Кассир открывает смену (id создаёт касса)
+# @name shift
+POST {{api}}/shifts
+Authorization: Bearer {{cashier.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "id": "{{$guid}}", "openingCash": 1000 }
+
+### 13. Чек: 1.250 кг колбасы × 520 = 650.00, оплата смешанная — 150 наличными + 500 картой
+# @name sale
+POST {{api}}/sales
+Authorization: Bearer {{cashier.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "id": "{{$guid}}",
+  "shiftId": "{{shift.response.body.$.id}}",
+  "localNumber": 1,
+  "createdAtLocal": "{{$datetime iso8601}}",
+  "items": [
+    { "id": "{{$guid}}", "variantId": "b0000000-0000-0000-0000-00000000be03", "qty": 1.250, "price": 520.00, "scannedCode": "2201234012502" }
+  ],
+  "payments": [
+    { "id": "{{$guid}}", "method": "cash", "amount": 150.00 },
+    { "id": "{{$guid}}", "method": "card", "amount": 500.00 }
+  ]
+}
+
+### 14. Возврат 0.500 кг из этого чека отдельным чеком type = return: 260.00 наличными
+POST {{api}}/sales
+Authorization: Bearer {{cashier.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "id": "{{$guid}}",
+  "shiftId": "{{shift.response.body.$.id}}",
+  "localNumber": 2,
+  "createdAtLocal": "{{$datetime iso8601}}",
+  "type": "return",
+  "returnOfSaleId": "{{sale.response.body.$.id}}",
+  "items": [ { "id": "{{$guid}}", "qty": 0.500, "returnOfItemId": "{{sale.response.body.$.items[0].id}}" } ],
+  "payments": [ { "id": "{{$guid}}", "method": "cash", "amount": 260.00 } ]
+}
+
+### 15. Вернуть больше проданного (осталось 0.750 кг) — 400
+POST {{api}}/sales
+Authorization: Bearer {{cashier.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "id": "{{$guid}}",
+  "shiftId": "{{shift.response.body.$.id}}",
+  "localNumber": 3,
+  "createdAtLocal": "{{$datetime iso8601}}",
+  "type": "return",
+  "returnOfSaleId": "{{sale.response.body.$.id}}",
+  "items": [ { "id": "{{$guid}}", "qty": 1.000, "returnOfItemId": "{{sale.response.body.$.items[0].id}}" } ],
+  "payments": [ { "id": "{{$guid}}", "method": "cash", "amount": 520.00 } ]
+}
+
+### 16. Закрыть смену: ожидается 1000 + 150 − 260 = 890 наличными
+POST {{api}}/shifts/{{shift.response.body.$.id}}/close
+Authorization: Bearer {{cashier.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "closingCash": 890 }
+
+### 17. Отключить кассу — её токены перестают работать сразу
 POST {{api}}/devices/{{device.response.body.$.deviceId}}/revoke
 Authorization: Bearer {{manager.response.body.$.accessToken}}

@@ -3,11 +3,13 @@ using KassirERP.Application.Auth;
 using KassirERP.Application.Catalog;
 using KassirERP.Application.Devices;
 using KassirERP.Application.Purchases;
+using KassirERP.Application.Sales;
 using KassirERP.Infrastructure.Auth;
 using KassirERP.Infrastructure.Catalog;
 using KassirERP.Infrastructure.Devices;
 using KassirERP.Infrastructure.Persistence;
 using KassirERP.Infrastructure.Purchases;
+using KassirERP.Infrastructure.Sales;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -21,7 +23,7 @@ public static class DependencyInjection
     /// <summary>Потолок пула соединений к Postgres на экземпляр API, если в строке подключения не задан.</summary>
     public const int DefaultMaxPoolSize = 30;
 
-    /// <summary>Postgres, вход (пароль/PIN, JWT), кассы, товары, приход, health check.</summary>
+    /// <summary>Postgres, вход (пароль/PIN, JWT), кассы, товары, приход, продажи, health check.</summary>
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         var connectionString = configuration.GetConnectionString(ConnectionStringName);
@@ -64,6 +66,7 @@ public static class DependencyInjection
 
         services.AddScoped<IProductCatalog, ProductCatalog>();
         services.AddScoped<IPurchaseStore, PurchaseStore>();
+        services.AddScoped<ISalesStore, SalesStore>();
 
         services.AddHealthChecks()
             .AddCheck<PostgresHealthCheck>("postgres", tags: [HealthTags.Ready], timeout: TimeSpan.FromSeconds(3));

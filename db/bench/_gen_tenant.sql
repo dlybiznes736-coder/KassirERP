@@ -40,6 +40,10 @@ SELECT id, :'tenant', store_id, 'Кассир ' || store_n || '-' || k,
        'cashier' || store_n || '_' || k, 'cashier'
 FROM g_users;
 
+-- Доступ кассира к филиалам — явный список (миграция 0007): свой филиал.
+INSERT INTO user_stores (tenant_id, user_id, store_id)
+SELECT :'tenant', id, store_id FROM g_users;
+
 CREATE TEMP TABLE g_suppliers AS SELECT n, uuid_v7() AS id FROM generate_series(1, 30) n;
 INSERT INTO suppliers (id, tenant_id, name, phone)
 SELECT id, :'tenant', 'Поставщик ' || n, '+996555' || lpad(n::text, 6, '0') FROM g_suppliers;

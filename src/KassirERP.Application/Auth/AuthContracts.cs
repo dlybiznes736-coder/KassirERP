@@ -41,6 +41,9 @@ public interface IAuthStore
     Task ResetAttemptsAsync(Guid userId, CredentialKind kind, CancellationToken ct);
 
     Task<bool> StoreBelongsToTenantAsync(Guid tenantId, Guid storeId, CancellationToken ct);
+
+    /// <summary>Филиал есть в явном списке доступа сотрудника (user_stores).</summary>
+    Task<bool> UserHasStoreAsync(Guid userId, Guid storeId, CancellationToken ct);
 }
 
 public interface IPasswordHasher
