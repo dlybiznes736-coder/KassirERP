@@ -29,7 +29,8 @@ public sealed class SalesService(ISalesStore store, ITenantContext tenant)
 
     public Task<ShiftView?> GetShiftAsync(Guid shiftId, CancellationToken ct) => store.GetShiftAsync(shiftId, ct);
 
-    public Task<SaleResult> CreateSaleAsync(NewSale sale, CancellationToken ct)
+    /// <param name="late">Документ из синхронизации: в закрытую смену принимается как поздний.</param>
+    public Task<SaleResult> CreateSaleAsync(NewSale sale, CancellationToken ct, bool late = false)
     {
         if (sale.Id == Guid.Empty || sale.ShiftId == Guid.Empty)
         {
@@ -127,7 +128,7 @@ public sealed class SalesService(ISalesStore store, ITenantContext tenant)
             throw new SaleValidationException("id оплат повторяются.");
         }
 
-        return store.CreateSaleAsync(sale, Context(), ct);
+        return store.CreateSaleAsync(sale, Context() with { Late = late }, ct);
     }
 
     public Task<SaleView?> GetSaleAsync(Guid saleId, CancellationToken ct) => store.GetSaleAsync(saleId, ct);

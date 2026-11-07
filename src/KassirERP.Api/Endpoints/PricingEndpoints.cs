@@ -2,14 +2,18 @@ using KassirERP.Application.Pricing;
 
 namespace KassirERP.Api.Endpoints;
 
-/// <summary>Прайс-листы. Цены и назначение листа филиалу меняют владелец, администратор, менеджер.</summary>
+/// <summary>
+/// Прайс-листы и цены. Меняют владелец, администратор, менеджер (prices.write);
+/// смотрят они же и кладовщик (prices.read). Кассир — 403 на всё.
+/// </summary>
 internal static class PricingEndpoints
 {
     public const string WritePolicy = "prices.write";
+    public const string ReadPolicy = "prices.read";
 
     public static void MapPricingEndpoints(this IEndpointRouteBuilder app)
     {
-        var lists = app.MapGroup("/price-lists").WithTags("Прайс-листы").RequireAuthorization();
+        var lists = app.MapGroup("/price-lists").WithTags("Прайс-листы").RequireAuthorization(ReadPolicy);
 
         lists.MapPost("/", async (NewPriceList request, PriceListService service, CancellationToken ct) =>
             ToHttp(await service.CreateAsync(request, ct), $"/price-lists/{request.Id}")).RequireAuthorization(WritePolicy);
@@ -22,12 +26,23 @@ internal static class PricingEndpoints
         lists.MapPut("/{id:guid}/items", async (Guid id, SetPrices request, PriceListService service, CancellationToken ct) =>
             ToHttp(await service.SetPricesAsync(id, request, ct))).RequireAuthorization(WritePolicy);
 
+        lists.MapPatch("/{id:guid}", async (Guid id, RenamePriceList request, PriceListService service, CancellationToken ct) =>
+            ToHttp(await service.RenameAsync(id, request, ct))).RequireAuthorization(WritePolicy);
+
+        // Удалить можно лист, не назначенный ни одному филиалу (иначе 409).
+        lists.MapDelete("/{id:guid}", async (Guid id, PriceListService service, CancellationToken ct) =>
+            ToHttp(await service.DeleteAsync(id, ct))).RequireAuthorization(WritePolicy);
+
+        // Базовые цены пар (действуют без листа и для пар, которых нет в листе). Журналируются.
+        app.MapPut("/base-prices", async (SetBasePrices request, PriceListService service, CancellationToken ct) =>
+            ToHttp(await service.SetBasePricesAsync(request, ct))).WithTags("Прайс-листы").RequireAuthorization(WritePolicy);
+
         lists.MapDelete("/{id:guid}/items/{variantId:guid}", async (Guid id, Guid variantId, PriceListService service, CancellationToken ct) =>
             ToHttp(await service.RemovePriceAsync(id, variantId, ct))).RequireAuthorization(WritePolicy);
 
         // Журнал: кто, когда, было, стало. Без фильтров — последние 500 изменений фирмы.
         app.MapGet("/price-changes", async (Guid? priceListId, Guid? variantId, PriceListService service, CancellationToken ct) =>
-            Results.Ok(await service.ChangesAsync(priceListId, variantId, ct))).WithTags("Прайс-листы").RequireAuthorization();
+            Results.Ok(await service.ChangesAsync(priceListId, variantId, ct))).WithTags("Прайс-листы").RequireAuthorization(ReadPolicy);
 
         // Лист филиала; priceListId = null — базовые цены.
         app.MapPut("/stores/{storeId:guid}/price-list", async (Guid storeId, AssignPriceList request, PriceListService service, CancellationToken ct) =>

@@ -1,8 +1,10 @@
+using KassirERP.Application.Admin;
 using KassirERP.Application.Auth;
 using KassirERP.Application.Catalog;
 using KassirERP.Application.Devices;
 using KassirERP.Application.Pricing;
 using KassirERP.Application.Purchases;
+using KassirERP.Application.Reports;
 using KassirERP.Application.Sales;
 using KassirERP.Application.Stock;
 using KassirERP.Application.Sync;
@@ -25,6 +27,8 @@ public static class DependencyInjection
         services.AddScoped<TransferService>();
         services.AddScoped<StockDocumentService>();
         services.AddScoped<SyncService>();
+        services.AddScoped<AdminService>();
+        services.AddScoped<ReportService>();
         return services;
     }
 }

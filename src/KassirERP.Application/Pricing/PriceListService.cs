@@ -54,4 +54,41 @@ public sealed class PriceListService(IPriceListStore store)
 
     public Task<IReadOnlyList<PriceChangeView>> ChangesAsync(Guid? listId, Guid? variantId, CancellationToken ct) =>
         store.ChangesAsync(listId, variantId, ct);
+
+    public Task<PricingResult> RenameAsync(Guid listId, RenamePriceList request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Name) || request.Name.Trim().Length > 100)
+        {
+            throw new PricingValidationException("Название листа: от 1 до 100 символов.");
+        }
+
+        return store.RenameAsync(listId, request.Name.Trim(), ct);
+    }
+
+    public Task<PricingResult> DeleteAsync(Guid listId, CancellationToken ct) => store.DeleteAsync(listId, ct);
+
+    public Task<PricingResult> SetBasePricesAsync(SetBasePrices request, CancellationToken ct)
+    {
+        var items = request.Items;
+        if (items is null || items.Count == 0 || items.Count > MaxItemsPerRequest)
+        {
+            throw new PricingValidationException($"От 1 до {MaxItemsPerRequest} цен за запрос.");
+        }
+
+        foreach (var item in items)
+        {
+            if (item.VariantId == Guid.Empty || item.SalePrice < 0 || item.SalePrice > 999_999_999_999.99m
+                || decimal.Round(item.SalePrice, 2) != item.SalePrice)
+            {
+                throw new PricingValidationException("Цена: нужна пара и сумма от 0, не больше двух знаков после запятой.");
+            }
+        }
+
+        if (items.Select(i => i.VariantId).Distinct().Count() != items.Count)
+        {
+            throw new PricingValidationException("Пара в запросе повторяется.");
+        }
+
+        return store.SetBasePricesAsync(items, ct);
+    }
 }

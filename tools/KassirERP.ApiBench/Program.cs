@@ -19,6 +19,7 @@
 //   ... -- --app-cs "Host=...;Database=kassir_x3;..." --out x3.md   (другая база)
 //   ... -- --mode sales --sales 1000 --returns 200 --out sales.md     (проведение чека, SalesBench)
 //   ... -- --mode sync --batch 500 --batches 3 --out sync.md          (синхронизация кассы, SyncBench)
+//   ... -- --mode reports --from 2025-11-01 --to 2026-10-31 --out reports.md   (отчёты, ReportBench)
 // =====================================================================
 using System.Diagnostics;
 using System.Globalization;
@@ -37,6 +38,13 @@ if (Arg("--mode", "read") == "sales")
         int.Parse(Arg("--sales", "1000"), CultureInfo.InvariantCulture),
         int.Parse(Arg("--returns", "200"), CultureInfo.InvariantCulture),
         Arg("--out", "SALES_REPORT.md"));
+    return;
+}
+
+// Режим «отчёты»: время каждого отчёта за период по филиалу (шаг 7), см. ReportBench.
+if (Arg("--mode", "read") == "reports")
+{
+    await ReportBench.RunAsync(api, Arg("--from", "2025-11-01"), Arg("--to", "2026-10-31"), Arg("--out", "REPORTS_REPORT.md"));
     return;
 }
 

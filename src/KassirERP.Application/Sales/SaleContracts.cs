@@ -23,9 +23,14 @@ public sealed record NewShift(Guid Id, decimal OpeningCash);
 
 public sealed record CloseShift(decimal ClosingCash);
 
+/// <summary>
+/// ClosingCash — посчитал кассир, ExpectedCash — посчитала система. ChangedAfterClose —
+/// после закрытия пришёл поздний документ: ожидаемые наличные пересчитаны (журнал shift_changes).
+/// </summary>
 public sealed record ShiftView(
     Guid Id, Guid StoreId, Guid DeviceId, Guid CashierId, string Status,
-    DateTimeOffset OpenedAt, DateTimeOffset? ClosedAt, decimal OpeningCash, decimal? ClosingCash, decimal? ExpectedCash);
+    DateTimeOffset OpenedAt, DateTimeOffset? ClosedAt, decimal OpeningCash, decimal? ClosingCash, decimal? ExpectedCash,
+    bool ChangedAfterClose = false);
 
 // --- Чек -----------------------------------------------------------------
 
@@ -60,10 +65,15 @@ public sealed record SaleItemView(
 
 public sealed record PaymentView(Guid Id, string Method, decimal Amount);
 
+/// <summary>
+/// AfterClose — поздний документ: принят в уже закрытую смену. ReviewReason — поздний
+/// возврат больше проданного: принят, но требует разбора (null — не требует).
+/// </summary>
 public sealed record SaleView(
     Guid Id, string Type, Guid StoreId, Guid ShiftId, Guid DeviceId, Guid CashierId, int LocalNumber,
     Guid? ReturnOfSaleId, Guid? CustomerId, decimal Subtotal, decimal DiscountTotal, decimal Total,
-    DateTimeOffset CreatedAtLocal, IReadOnlyList<SaleItemView> Items, IReadOnlyList<PaymentView> Payments);
+    DateTimeOffset CreatedAtLocal, IReadOnlyList<SaleItemView> Items, IReadOnlyList<PaymentView> Payments,
+    bool AfterClose = false, string? ReviewReason = null);
 
 public enum SaleStatus
 {
@@ -93,8 +103,11 @@ public sealed record DeviceState(Guid DeviceId, Guid StoreId, int LastLocalNumbe
 
 public sealed record SaleResult(SaleStatus Status, string? Detail = null, SaleView? Sale = null, ShiftView? Shift = null);
 
-/// <summary>Кто пробивает чек — только из токена кассы.</summary>
-public sealed record SaleContext(Guid StoreId, Guid DeviceId, Guid UserId);
+/// <summary>
+/// Кто пробивает чек — только из токена кассы. Late — документ пришёл синхронизацией
+/// (сделан без связи): если его смена уже закрыта, он принимается как поздний.
+/// </summary>
+public sealed record SaleContext(Guid StoreId, Guid DeviceId, Guid UserId, bool Late = false);
 
 /// <summary>Смены и чеки. Всё через TenantDb, в тенанте из токена.</summary>
 public interface ISalesStore

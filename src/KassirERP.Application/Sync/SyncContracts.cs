@@ -29,8 +29,8 @@ public static class SyncItemStatus
     public const string Retry = "retry";
 }
 
-/// <summary>Id — id смены (открытие и закрытие) или чека.</summary>
-public sealed record SyncItemResult(Guid Id, string Status, string? Error = null);
+/// <summary>Id — id смены (открытие и закрытие) или чека. Note — пояснение к принятому (поздний документ).</summary>
+public sealed record SyncItemResult(Guid Id, string Status, string? Error = null, string? Note = null);
 
 public sealed record SyncPushResult(
     IReadOnlyList<SyncItemResult> Shifts, IReadOnlyList<SyncItemResult> Sales, IReadOnlyList<SyncItemResult> Closes,

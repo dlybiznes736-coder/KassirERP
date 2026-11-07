@@ -292,3 +292,86 @@ Authorization: Bearer {{cashier2.response.body.$.accessToken}}
 ### 37. Цены листа филиала (лист снят в шаге 23: priceListId = null, у кассы базовые цены)
 GET {{api}}/sync/prices
 Authorization: Bearer {{cashier2.response.body.$.accessToken}}
+
+### 38. Поздний документ: смена из шага 32 закрыта в шаге 34; касса присылает чек, сделанный до закрытия.
+### В ответе — accepted и note «принят в закрытую смену»
+POST {{api}}/sync/push
+Authorization: Bearer {{cashier2.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "sales": [
+    { "id": "{{$guid}}", "shiftId": "{{push1.response.body.$.shifts[0].id}}", "localNumber": 3, "createdAtLocal": "{{$datetime iso8601}}",
+      "items": [ { "id": "{{$guid}}", "variantId": "b0000000-0000-0000-0000-00000000be03", "qty": 0.500, "price": 520.00 } ],
+      "payments": [ { "id": "{{$guid}}", "method": "cash", "amount": 260.00 } ] }
+  ]
+}
+
+### 39. Смена: changedAfterClose = true, expectedCash пересчитан (520 + 260 = 780), closingCash кассира (520) не тронут
+GET {{api}}/shifts/{{push1.response.body.$.shifts[0].id}}
+Authorization: Bearer {{cashier2.response.body.$.accessToken}}
+
+### 40. Кассир — 403 на отчёты, цены и настройки
+GET {{api}}/reports/shifts?from={{$localDatetime "YYYY-MM-DD"}}&to={{$localDatetime "YYYY-MM-DD"}}
+Authorization: Bearer {{cashier2.response.body.$.accessToken}}
+
+### 41. Базовая цена колбасы — 530 (журналируется, priceListId = null)
+PUT {{api}}/base-prices
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "items": [ { "variantId": "b0000000-0000-0000-0000-00000000be03", "salePrice": 530.00 } ] }
+
+### 42. Вернуть базовую цену 520 (её ждёт замер чеков)
+PUT {{api}}/base-prices
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "items": [ { "variantId": "b0000000-0000-0000-0000-00000000be03", "salePrice": 520.00 } ] }
+
+### 43. Переименовать прайс-лист из шага 18
+PATCH {{api}}/price-lists/{{pricelist.response.body.$.id}}
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "name": "Стенд: зона 1, переименован {{$randomInt 1 99999}}" }
+
+### 44. Удалить его (с филиала снят в шаге 23; назначенный — 409)
+DELETE {{api}}/price-lists/{{pricelist.response.body.$.id}}
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 45. Сотрудники и их филиалы для входа по PIN (менять — PUT /users/{id}/stores { "storeIds": [...] })
+GET {{api}}/users
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 46. Весовые префиксы (пусто — все 20–29; менять — PUT /weight-prefixes { "prefixes": ["22"] })
+GET {{api}}/weight-prefixes
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 47. Отчёт: продажи и прибыль по дням за год, филиал менеджера
+GET {{api}}/reports/sales?from={{$localDatetime "YYYY-MM-DD" -364 d}}&to={{$localDatetime "YYYY-MM-DD"}}&storeId={{manager.response.body.$.storeId}}
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 48. Отчёт: смены, изменённые после закрытия (среди них — смена из шага 32)
+GET {{api}}/reports/shifts?from={{$localDatetime "YYYY-MM-DD" -1 d}}&to={{$localDatetime "YYYY-MM-DD"}}&storeId={{manager.response.body.$.storeId}}&changedOnly=true
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 49. Отчёт: расхождения цен за год
+GET {{api}}/reports/price-mismatches?from={{$localDatetime "YYYY-MM-DD" -364 d}}&to={{$localDatetime "YYYY-MM-DD"}}&storeId={{manager.response.body.$.storeId}}
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 50. Отчёт: поздние возвраты на разбор за год
+GET {{api}}/reports/late-returns?from={{$localDatetime "YYYY-MM-DD" -364 d}}&to={{$localDatetime "YYYY-MM-DD"}}&storeId={{manager.response.body.$.storeId}}
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 51. Отчёт: остатки филиала, страница 5 (next — курсор следующей страницы)
+GET {{api}}/reports/stock?limit=5
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 52. Отчёт: что истекает в ближайшие 30 дней
+GET {{api}}/reports/expiring?days=30
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 53. Отчёт: отрицательные остатки (колбаса из шага 13 и т.п.)
+GET {{api}}/reports/negative-stock?limit=20
+Authorization: Bearer {{manager.response.body.$.accessToken}}

@@ -38,6 +38,12 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy(SalesEndpoints.DevicePolicy, policy => policy.RequireClaim(JwtClaims.DeviceId))
     // Цены и лист филиала — владелец, администратор, менеджер (кладовщик заводит товар, но не цены).
     .AddPolicy(PricingEndpoints.WritePolicy, policy => policy.RequireRole(Roles.Owner, Roles.Admin, Roles.Manager))
+    .AddPolicy(PricingEndpoints.ReadPolicy, policy => policy.RequireRole(Roles.CatalogWriters))
+    // Настройки фирмы: доступ к филиалам, весовые префиксы. Кассир и кладовщик — 403.
+    // Отчёты: деньги — владелец, администратор, менеджер; склад — и кладовщик. Кассир — 403.
+    .AddPolicy(ReportEndpoints.FinancePolicy, policy => policy.RequireRole(Roles.Owner, Roles.Admin, Roles.Manager))
+    .AddPolicy(ReportEndpoints.StockPolicy, policy => policy.RequireRole(Roles.CatalogWriters))
+    .AddPolicy(AdminEndpoints.ManagePolicy, policy => policy.RequireRole(Roles.Owner, Roles.Admin, Roles.Manager))
     .AddPolicy(TransferEndpoints.WritePolicy, policy => policy.RequireRole(Roles.CatalogWriters))
     .AddPolicy(StockDocumentEndpoints.WritePolicy, policy => policy.RequireRole(Roles.CatalogWriters))
     // Новую кассу подключает только менеджер, вошедший по паролю: с украденной
@@ -119,6 +125,8 @@ app.MapPricingEndpoints();
 app.MapTransferEndpoints();
 app.MapStockDocumentEndpoints();
 app.MapSyncEndpoints();
+app.MapAdminEndpoints();
+app.MapReportEndpoints();
 
 app.Run();
 

@@ -53,7 +53,7 @@ public sealed class SyncService(SalesService sales, ISyncStore store, ITenantCon
             saleResults[index] = sale is not null && rejectedShifts.Contains(sale.ShiftId)
                 ? new SyncItemResult(sale.Id, SyncItemStatus.Rejected, "Смена чека отклонена в этой же пачке.")
                 : await RunAsync(sale?.Id ?? Guid.Empty,
-                    () => sales.CreateSaleAsync(sale ?? throw new SaleValidationException("Пустой чек."), ct), ct);
+                    () => sales.CreateSaleAsync(sale ?? throw new SaleValidationException("Пустой чек."), ct, late: true), ct);
         }
 
         // 3. Закрытия — последними. Если чек этой смены не принят из-за временной
@@ -124,7 +124,7 @@ public sealed class SyncService(SalesService sales, ISyncStore store, ITenantCon
             var result = await work();
             return result.Status switch
             {
-                SaleStatus.Done => new SyncItemResult(id, SyncItemStatus.Accepted),
+                SaleStatus.Done => new SyncItemResult(id, SyncItemStatus.Accepted, Note: Note(result.Sale)),
                 SaleStatus.AlreadyDone => new SyncItemResult(id, SyncItemStatus.Duplicate),
                 // Исходный чек возврата или смена ещё не пришли (с другой кассы, следующей пачкой).
                 SaleStatus.OriginalMissing or SaleStatus.ShiftMissing => new SyncItemResult(id, SyncItemStatus.Retry, result.Detail),
@@ -142,6 +142,13 @@ public sealed class SyncService(SalesService sales, ISyncStore store, ITenantCon
             return new SyncItemResult(id, SyncItemStatus.Retry, TemporaryError);
         }
     }
+
+    private static string? Note(SaleView? sale) => sale switch
+    {
+        { ReviewReason: { } reason } => "Поздний документ: принят в закрытую смену, на разбор. " + reason,
+        { AfterClose: true } => "Поздний документ: принят в закрытую смену, ожидаемые наличные пересчитаны.",
+        _ => null,
+    };
 
     private static SyncCursor Cursor(string? after) =>
         SyncCursor.TryParse(after, out var cursor) ? cursor : throw new SyncValidationException("Неверный курсор синхронизации.");

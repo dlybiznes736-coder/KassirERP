@@ -15,14 +15,14 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
 {
     private const string ShiftSql =
         """
-        SELECT id, store_id, device_id, cashier_id, status, opened_at, closed_at, opening_cash, closing_cash, expected_cash
+        SELECT id, store_id, device_id, cashier_id, status, opened_at, closed_at, opening_cash, closing_cash, expected_cash, changed_after_close
         FROM cash_shifts WHERE id = $1
         """;
 
     private const string SaleSql =
         """
         SELECT id, type, store_id, shift_id, device_id, cashier_id, local_number, return_of_sale_id, customer_id,
-               subtotal, discount_total, total, created_at_local
+               subtotal, discount_total, total, created_at_local, after_close, review_reason
         FROM sales WHERE id = $1
         """;
 
@@ -115,6 +115,14 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
                 return Replay(existing, sale, createdAt);
             }
 
+            if (context.Late)
+            {
+                // Поздние документы одной смены — по очереди: каждый пересчитывает её
+                // ожидаемые наличные (иначе две транзакции с FOR SHARE на смене
+                // взаимно блокировались бы на её обновлении).
+                await ExecAsync(connection, tx, "SELECT pg_advisory_xact_lock(hashtextextended('shift:' || $1::text, 0))", ct, sale.ShiftId);
+            }
+
             var shift = await ReadShiftAsync(connection, tx, sale.ShiftId, ct, forShare: true);
             if (shift is null)
             {
@@ -126,7 +134,10 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
                 return new SaleResult(SaleStatus.Invalid, "Смена не найдена или открыта на другой кассе.");
             }
 
-            if (shift.Status != "open")
+            // Закрытая смена: онлайн — отказ; из синхронизации — поздний документ
+            // (база пересчитает ожидаемые наличные, пометит смену и запишет в журнал).
+            var afterClose = shift.Status != "open";
+            if (afterClose && !context.Late)
             {
                 return new SaleResult(SaleStatus.ShiftClosed, "Смена закрыта: откройте новую.");
             }
@@ -138,7 +149,7 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
             }
 
             var built = sale.Type == SaleTypes.Return
-                ? await BuildReturnLinesAsync(connection, tx, sale, ct)
+                ? await BuildReturnLinesAsync(connection, tx, sale, allowExcess: afterClose, ct)
                 : await BuildSaleLinesAsync(connection, tx, sale, context.StoreId, ct);
             if (built.Error is { } error)
             {
@@ -160,12 +171,14 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
                 var inserted = await ExecAsync(connection, tx,
                     """
                     INSERT INTO sales (id, tenant_id, store_id, shift_id, cashier_id, customer_id, device_id, local_number,
-                                       type, return_of_sale_id, subtotal, discount_total, total, created_at_local)
-                    VALUES ($1, current_tenant_id(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                                       type, return_of_sale_id, subtotal, discount_total, total, created_at_local,
+                                       after_close, review_reason)
+                    VALUES ($1, current_tenant_id(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, nullif($15, ''))
                     ON CONFLICT (id) DO NOTHING
                     """, ct,
                     sale.Id, context.StoreId, sale.ShiftId, context.UserId, (object?)sale.CustomerId ?? DBNull.Value, context.DeviceId,
-                    sale.LocalNumber, sale.Type, (object?)sale.ReturnOfSaleId ?? DBNull.Value, subtotal, discountTotal, total, createdAt);
+                    sale.LocalNumber, sale.Type, (object?)sale.ReturnOfSaleId ?? DBNull.Value, subtotal, discountTotal, total, createdAt,
+                    afterClose, built.ReviewReason ?? "");
                 if (inserted == 0)
                 {
                     // Тот же чек только что провела параллельная отправка.
@@ -228,7 +241,8 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
         public bool PriceMismatch => ListPrice is { } list && list != Price;
     }
 
-    private sealed record Built(List<Line>? Lines, SaleResult? Error);
+    /// <summary>ReviewReason — поздний возврат больше проданного: принимается, но на разбор.</summary>
+    private sealed record Built(List<Line>? Lines, SaleResult? Error, string? ReviewReason = null);
 
     /// <summary>
     /// Продажа: цена и скидка — с кассы (её видел покупатель; касса могла работать
@@ -282,7 +296,7 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
     /// Возвраты одного чека идут строго по очереди (advisory lock): иначе два
     /// одновременных возврата вместе могли бы превысить проданное.
     /// </summary>
-    private static async Task<Built> BuildReturnLinesAsync(NpgsqlConnection connection, NpgsqlTransaction tx, NewSale sale, CancellationToken ct)
+    private static async Task<Built> BuildReturnLinesAsync(NpgsqlConnection connection, NpgsqlTransaction tx, NewSale sale, bool allowExcess, CancellationToken ct)
     {
         var originalId = sale.ReturnOfSaleId!.Value;
         await ExecAsync(connection, tx, "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))", ct, originalId);
@@ -318,6 +332,7 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
             }
         }
 
+        var review = new List<string>();
         foreach (var group in sale.Items.GroupBy(i => i.ReturnOfItemId!.Value))
         {
             if (!originals.TryGetValue(group.Key, out var original))
@@ -326,7 +341,13 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
             }
 
             var requested = group.Sum(i => i.Qty);
-            if (original.Returned + requested > original.Qty)
+            if (original.Returned + requested > original.Qty && allowExcess)
+            {
+                // Поздний возврат: деньги покупателю уже отданы — не отклоняем, а на разбор.
+                review.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                    $"Возврат больше проданного: строка {group.Key}, продано {original.Qty:0.###}, уже возвращено {original.Returned:0.###}, сейчас {requested:0.###}."));
+            }
+            else if (original.Returned + requested > original.Qty)
             {
                 return new Built(null, new SaleResult(SaleStatus.ReturnExceedsSold,
                     $"Возврат больше проданного: продано {original.Qty:0.###}, уже возвращено {original.Returned:0.###}, " +
@@ -345,7 +366,7 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
             return new Line(i.Id, o.Variant, o.Unit, i.Qty, o.Price, SaleMath.ProportionalDiscount(o.Discount, i.Qty, o.Qty),
                 o.Cost, i.ScannedCode, i.ReturnOfItemId);
         }).ToList();
-        return new Built(lines, null);
+        return new Built(lines, null, review.Count == 0 ? null : string.Join(" ", review));
     }
 
     private static async Task InsertPaymentsAsync(NpgsqlConnection connection, NpgsqlTransaction tx, NewSale sale, CancellationToken ct)
@@ -460,6 +481,8 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
         var discountTotal = reader.GetDecimal(10);
         var total = reader.GetDecimal(11);
         var createdAt = reader.GetFieldValue<DateTimeOffset>(12);
+        var afterClose = reader.GetBoolean(13);
+        var reviewReason = reader.IsDBNull(14) ? null : reader.GetString(14);
 
         await reader.NextResultAsync(ct);
         var items = new List<SaleItemView>();
@@ -478,7 +501,7 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
         }
 
         return new SaleView(id, type, store, shift, device, cashier, number, returnOf, customer, subtotal, discountTotal, total,
-            createdAt, items, payments);
+            createdAt, items, payments, afterClose, reviewReason);
     }
 
     private static async Task<ShiftView?> ReadShiftAsync(NpgsqlConnection connection, NpgsqlTransaction tx, Guid shiftId, CancellationToken ct,
@@ -494,7 +517,8 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
     private static ShiftView ReadShift(NpgsqlDataReader reader) => new(
         reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetGuid(3), reader.GetString(4),
         reader.GetFieldValue<DateTimeOffset>(5), reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
-        reader.GetDecimal(7), reader.IsDBNull(8) ? null : reader.GetDecimal(8), reader.IsDBNull(9) ? null : reader.GetDecimal(9));
+        reader.GetDecimal(7), reader.IsDBNull(8) ? null : reader.GetDecimal(8), reader.IsDBNull(9) ? null : reader.GetDecimal(9),
+        reader.GetBoolean(10));
 
     /// <summary>Postgres хранит время с точностью до микросекунды, .NET — до 100 нс.</summary>
     private static DateTimeOffset TruncateToMicroseconds(DateTimeOffset value) =>

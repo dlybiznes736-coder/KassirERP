@@ -163,6 +163,75 @@ internal sealed class PriceListStore(TenantDb db) : IPriceListStore
         }, ct);
     }
 
+    public Task<PricingResult> RenameAsync(Guid listId, string name, CancellationToken ct) =>
+        db.WriteAsync(async (connection, tx) =>
+        {
+            try
+            {
+                await using var update = new NpgsqlCommand(
+                    "UPDATE price_lists SET name = $2, updated_at = now() WHERE id = $1 AND deleted_at IS NULL", connection, tx);
+                update.Parameters.Add(new NpgsqlParameter { Value = listId });
+                update.Parameters.Add(new NpgsqlParameter { Value = name });
+                return await update.ExecuteNonQueryAsync(ct) == 1
+                    ? new PricingResult(PricingStatus.Done)
+                    : new PricingResult(PricingStatus.NotFound, "Прайс-лист не найден.");
+            }
+            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+            {
+                return new PricingResult(PricingStatus.Conflict, "Прайс-лист с таким названием уже есть.");
+            }
+        }, ct);
+
+    public Task<PricingResult> DeleteAsync(Guid listId, CancellationToken ct) =>
+        db.WriteAsync(async (connection, tx) =>
+        {
+            await using (var lockRow = new NpgsqlCommand("SELECT 1 FROM price_lists WHERE id = $1 AND deleted_at IS NULL FOR UPDATE", connection, tx))
+            {
+                lockRow.Parameters.Add(new NpgsqlParameter { Value = listId });
+                if (await lockRow.ExecuteScalarAsync(ct) is null)
+                {
+                    return new PricingResult(PricingStatus.NotFound, "Прайс-лист не найден.");
+                }
+            }
+
+            if (await ExistsAsync(connection, tx, "SELECT 1 FROM stores WHERE price_list_id = $1", listId, ct))
+            {
+                return new PricingResult(PricingStatus.Conflict, "Лист назначен филиалу: сначала снимите его с филиалов.");
+            }
+
+            // Мягкое удаление: цены листа и журнал остаются для истории.
+            await ExecAsync(connection, tx, "UPDATE price_lists SET deleted_at = now() WHERE id = $1", ct, listId);
+            return new PricingResult(PricingStatus.Done);
+        }, ct);
+
+    public Task<PricingResult> SetBasePricesAsync(IReadOnlyList<BasePriceItem> items, CancellationToken ct) =>
+        db.WriteAsync(async (connection, tx) =>
+        {
+            var ids = items.Select(i => i.VariantId).ToArray();
+            await using (var check = new NpgsqlCommand(
+                "SELECT u.id FROM unnest($1::uuid[]) u(id) WHERE NOT EXISTS (SELECT 1 FROM product_variants v WHERE v.id = u.id AND v.deleted_at IS NULL) LIMIT 1",
+                connection, tx))
+            {
+                check.Parameters.Add(new NpgsqlParameter { Value = ids });
+                if (await check.ExecuteScalarAsync(ct) is Guid missing)
+                {
+                    return new PricingResult(PricingStatus.Invalid, $"Пара {missing} не найдена.");
+                }
+            }
+
+            // Одним оператором; журнал (base_price_journal) — одна вставка на оператор.
+            await using var update = new NpgsqlCommand(
+                """
+                UPDATE product_variants v SET sale_price = u.price
+                FROM unnest($1::uuid[], $2::numeric[]) AS u(id, price)
+                WHERE v.id = u.id AND v.sale_price IS DISTINCT FROM u.price
+                """, connection, tx);
+            update.Parameters.Add(new NpgsqlParameter { Value = ids });
+            update.Parameters.Add(new NpgsqlParameter { Value = items.Select(i => i.SalePrice).ToArray() });
+            var changed = await update.ExecuteNonQueryAsync(ct);
+            return new PricingResult(PricingStatus.Done, Body: new { changed });
+        }, ct);
+
     private static async Task<bool> ExistsAsync(NpgsqlConnection connection, NpgsqlTransaction tx, string sql, Guid id, CancellationToken ct)
     {
         await using var command = new NpgsqlCommand(sql, connection, tx);

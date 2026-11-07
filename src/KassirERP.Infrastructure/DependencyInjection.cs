@@ -1,19 +1,23 @@
 using KassirERP.Application.Abstractions;
+using KassirERP.Application.Admin;
 using KassirERP.Application.Auth;
 using KassirERP.Application.Catalog;
 using KassirERP.Application.Devices;
 using KassirERP.Application.Pricing;
 using KassirERP.Application.Purchases;
+using KassirERP.Application.Reports;
 using KassirERP.Application.Sales;
 using KassirERP.Application.Stock;
 using KassirERP.Application.Sync;
 using KassirERP.Application.Transfers;
+using KassirERP.Infrastructure.Admin;
 using KassirERP.Infrastructure.Auth;
 using KassirERP.Infrastructure.Catalog;
 using KassirERP.Infrastructure.Devices;
 using KassirERP.Infrastructure.Persistence;
 using KassirERP.Infrastructure.Pricing;
 using KassirERP.Infrastructure.Purchases;
+using KassirERP.Infrastructure.Reports;
 using KassirERP.Infrastructure.Sales;
 using KassirERP.Infrastructure.Stock;
 using KassirERP.Infrastructure.Sync;
@@ -79,6 +83,8 @@ public static class DependencyInjection
         services.AddScoped<ITransferStore, TransferStore>();
         services.AddScoped<IStockDocumentStore, StockDocumentStore>();
         services.AddScoped<ISyncStore, SyncStore>();
+        services.AddScoped<IAdminStore, AdminStore>();
+        services.AddScoped<IReportStore, ReportStore>();
 
         services.AddHealthChecks()
             .AddCheck<PostgresHealthCheck>("postgres", tags: [HealthTags.Ready], timeout: TimeSpan.FromSeconds(3));

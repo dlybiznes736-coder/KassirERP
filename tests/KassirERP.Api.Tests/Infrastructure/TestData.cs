@@ -149,7 +149,7 @@ public sealed class TestData
         var ids = new[] { A.Id, B.Id };
         foreach (var table in new[]
                  {
-                     "stock", "stock_movements", "payments", "sale_items", "sales", "cash_shifts", "purchase_items", "purchases",
+                     "stock", "stock_movements", "shift_changes", "payments", "sale_items", "sales", "cash_shifts", "purchase_items", "purchases",
                      "inventory_items", "inventories", "writeoff_items", "writeoffs",
                      "transfer_items", "transfers", "price_changes", "price_list_items", "price_lists",
                      "product_photos", "product_variants", "products", "categories", "customers", "suppliers", "sync_outbox",

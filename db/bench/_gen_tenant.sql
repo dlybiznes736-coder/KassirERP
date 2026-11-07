@@ -256,6 +256,11 @@ FROM (SELECT sale_id, price, qty, discount FROM g_items2
       SELECT sale_id, price, qty, discount FROM g_ritems) x
 GROUP BY sale_id;
 
+-- Смены генератора уже закрыты (история), а с миграции 0012 чек в закрытую
+-- смену — только поздний документ (sale_guard). История — не поздние
+-- документы, поэтому шапки чеков вставляются мимо триггеров (replica), как в
+-- миграциях. Строки чеков ниже — снова с триггерами: движения склада нужны.
+SET session_replication_role = replica;
 INSERT INTO sales (id, tenant_id, store_id, shift_id, cashier_id, customer_id, device_id,
                    local_number, type, return_of_sale_id, subtotal, discount_total, total,
                    created_at_local, synced_at)
@@ -269,6 +274,7 @@ JOIN g_doc_totals t ON t.sale_id = d.id
 JOIN g_devices dv ON dv.store_n = d.store_n
 LEFT JOIN g_customers c ON d.has_customer AND c.n = 1 + floor(d.r_cust * :n_customers)::int
 ORDER BY d.created_at;
+SET session_replication_role = origin;
 
 -- Строки чеков → триггер sale_item_movement → stock_movements → stock
 INSERT INTO sale_items (id, tenant_id, sale_id, variant_id, qty, price, cost_price, discount, total)

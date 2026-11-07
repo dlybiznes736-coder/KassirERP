@@ -4,6 +4,13 @@ namespace KassirERP.Application.Pricing;
 // цена его листа, если она есть, иначе базовая. id листа создаёт клиент.
 public sealed record NewPriceList(Guid Id, string Name);
 
+public sealed record RenamePriceList(string Name);
+
+/// <summary>Базовая цена пары (действует, если в листе филиала цены нет).</summary>
+public sealed record BasePriceItem(Guid VariantId, decimal SalePrice);
+
+public sealed record SetBasePrices(IReadOnlyList<BasePriceItem> Items);
+
 public sealed record PriceItem(Guid VariantId, decimal SalePrice);
 
 public sealed record SetPrices(IReadOnlyList<PriceItem> Items);
@@ -39,4 +46,11 @@ public interface IPriceListStore
     Task<PricingResult> RemovePriceAsync(Guid listId, Guid variantId, CancellationToken ct);
     Task<PricingResult> AssignToStoreAsync(Guid storeId, Guid? listId, CancellationToken ct);
     Task<IReadOnlyList<PriceChangeView>> ChangesAsync(Guid? listId, Guid? variantId, CancellationToken ct);
+    Task<PricingResult> RenameAsync(Guid listId, string name, CancellationToken ct);
+
+    /// <summary>Удалить лист можно, только если он не назначен ни одному филиалу.</summary>
+    Task<PricingResult> DeleteAsync(Guid listId, CancellationToken ct);
+
+    /// <summary>Базовые цены пар; журнал (price_list_id = null) пишет база.</summary>
+    Task<PricingResult> SetBasePricesAsync(IReadOnlyList<BasePriceItem> items, CancellationToken ct);
 }
