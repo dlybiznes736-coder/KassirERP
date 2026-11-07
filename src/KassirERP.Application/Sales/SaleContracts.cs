@@ -79,6 +79,10 @@ public enum SaleStatus
     Invalid,
     /// <summary>Вернуть больше, чем продано (с учётом прежних возвратов).</summary>
     ReturnExceedsSold,
+    /// <summary>Исходного чека возврата на сервере нет (ещё не пришёл). Онлайн — 400, при синхронизации — повторить позже.</summary>
+    OriginalMissing,
+    /// <summary>Смены чека на сервере нет (ещё не пришла). Онлайн — 400, при синхронизации — повторить позже.</summary>
+    ShiftMissing,
 }
 
 /// <summary>

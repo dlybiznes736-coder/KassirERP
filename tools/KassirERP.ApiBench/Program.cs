@@ -18,6 +18,7 @@
 //   dotnet run -c Release --project tools/KassirERP.ApiBench -- --out db/bench/API_REPORT.md
 //   ... -- --app-cs "Host=...;Database=kassir_x3;..." --out x3.md   (другая база)
 //   ... -- --mode sales --sales 1000 --returns 200 --out sales.md     (проведение чека, SalesBench)
+//   ... -- --mode sync --batch 500 --batches 3 --out sync.md          (синхронизация кассы, SyncBench)
 // =====================================================================
 using System.Diagnostics;
 using System.Globalization;
@@ -36,6 +37,16 @@ if (Arg("--mode", "read") == "sales")
         int.Parse(Arg("--sales", "1000"), CultureInfo.InvariantCulture),
         int.Parse(Arg("--returns", "200"), CultureInfo.InvariantCulture),
         Arg("--out", "SALES_REPORT.md"));
+    return;
+}
+
+// Режим «синхронизация»: пачки чеков с кассы и забор изменений (шаг 6), см. SyncBench.
+if (Arg("--mode", "read") == "sync")
+{
+    await SyncBench.RunAsync(api,
+        int.Parse(Arg("--batch", "500"), CultureInfo.InvariantCulture),
+        int.Parse(Arg("--batches", "3"), CultureInfo.InvariantCulture),
+        Arg("--out", "SYNC_REPORT.md"));
     return;
 }
 

@@ -4,6 +4,8 @@ using KassirERP.Application.Devices;
 using KassirERP.Application.Pricing;
 using KassirERP.Application.Purchases;
 using KassirERP.Application.Sales;
+using KassirERP.Application.Stock;
+using KassirERP.Application.Sync;
 using KassirERP.Application.Transfers;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -21,6 +23,8 @@ public static class DependencyInjection
         services.AddScoped<SalesService>();
         services.AddScoped<PriceListService>();
         services.AddScoped<TransferService>();
+        services.AddScoped<StockDocumentService>();
+        services.AddScoped<SyncService>();
         return services;
     }
 }

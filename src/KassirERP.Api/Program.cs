@@ -39,6 +39,7 @@ builder.Services.AddAuthorizationBuilder()
     // Цены и лист филиала — владелец, администратор, менеджер (кладовщик заводит товар, но не цены).
     .AddPolicy(PricingEndpoints.WritePolicy, policy => policy.RequireRole(Roles.Owner, Roles.Admin, Roles.Manager))
     .AddPolicy(TransferEndpoints.WritePolicy, policy => policy.RequireRole(Roles.CatalogWriters))
+    .AddPolicy(StockDocumentEndpoints.WritePolicy, policy => policy.RequireRole(Roles.CatalogWriters))
     // Новую кассу подключает только менеджер, вошедший по паролю: с украденной
     // кассы (вход по PIN) выпустить ещё одну кассу нельзя.
     .AddPolicy(DeviceEndpoints.ManagePolicy, policy => policy
@@ -116,6 +117,8 @@ app.MapPurchaseEndpoints();
 app.MapSalesEndpoints();
 app.MapPricingEndpoints();
 app.MapTransferEndpoints();
+app.MapStockDocumentEndpoints();
+app.MapSyncEndpoints();
 
 app.Run();
 

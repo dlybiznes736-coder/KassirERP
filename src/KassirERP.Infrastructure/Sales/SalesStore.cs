@@ -54,8 +54,9 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
                     return new SaleResult(SaleStatus.Done, Shift: stored);
                 }
 
-                // Повтор открытия той же смены этой кассой — не ошибка.
-                return stored is { Status: "open" } && stored.DeviceId == context.DeviceId && stored.OpeningCash == shift.OpeningCash
+                // Повтор открытия той же смены этой кассой — не ошибка, даже если смена
+                // уже закрыта (касса прислала пачку повторно): смена не переоткрывается.
+                return stored is not null && stored.DeviceId == context.DeviceId && stored.OpeningCash == shift.OpeningCash
                     ? new SaleResult(SaleStatus.AlreadyDone, Shift: stored)
                     : new SaleResult(SaleStatus.Conflict, "Смена с таким id уже есть, и она другая.");
             }
@@ -115,7 +116,12 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
             }
 
             var shift = await ReadShiftAsync(connection, tx, sale.ShiftId, ct, forShare: true);
-            if (shift is null || shift.DeviceId != context.DeviceId || shift.StoreId != context.StoreId)
+            if (shift is null)
+            {
+                return new SaleResult(SaleStatus.ShiftMissing, "Смена не найдена.");
+            }
+
+            if (shift.DeviceId != context.DeviceId || shift.StoreId != context.StoreId)
             {
                 return new SaleResult(SaleStatus.Invalid, "Смена не найдена или открыта на другой кассе.");
             }
@@ -286,7 +292,7 @@ internal sealed class SalesStore(TenantDb db) : ISalesStore
             type.Parameters.Add(new NpgsqlParameter { Value = originalId });
             if (await type.ExecuteScalarAsync(ct) is not string originalType)
             {
-                return new Built(null, new SaleResult(SaleStatus.Invalid, "Исходный чек не найден."));
+                return new Built(null, new SaleResult(SaleStatus.OriginalMissing, "Исходный чек не найден."));
             }
 
             if (originalType != SaleTypes.Sale)

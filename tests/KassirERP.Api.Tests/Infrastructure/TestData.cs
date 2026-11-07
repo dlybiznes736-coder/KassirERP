@@ -150,6 +150,7 @@ public sealed class TestData
         foreach (var table in new[]
                  {
                      "stock", "stock_movements", "payments", "sale_items", "sales", "cash_shifts", "purchase_items", "purchases",
+                     "inventory_items", "inventories", "writeoff_items", "writeoffs",
                      "transfer_items", "transfers", "price_changes", "price_list_items", "price_lists",
                      "product_photos", "product_variants", "products", "categories", "customers", "suppliers", "sync_outbox",
                      "weight_barcode_prefixes", "device_enrollments", "devices", "auth.login_attempts", "user_stores", "users", "stores",

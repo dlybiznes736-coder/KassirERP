@@ -192,3 +192,103 @@ Authorization: Bearer {{manager.response.body.$.accessToken}}
 Content-Type: application/json
 
 { "priceListId": null }
+
+### 24. Списание: 0.300 кг колбасы, просрочка (expired; ещё spoilage — порча, defect — брак)
+# @name writeoff
+POST {{api}}/writeoffs
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "id": "{{$guid}}",
+  "reason": "expired",
+  "note": "истёк срок",
+  "items": [ { "id": "{{$guid}}", "variantId": "b0000000-0000-0000-0000-00000000be03", "qty": 0.300 } ]
+}
+
+### 25. Инвентаризация в филиале менеджера (одна открытая на филиал; продажи не останавливаются)
+# @name inventory
+POST {{api}}/inventories
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "id": "{{$guid}}", "number": "ИНВ-стенд" }
+
+### 26. Подсчёт: колбасы на полке 40 кг. В ответе bookQty — учёт в момент подсчёта, difference = 40 − учёт
+POST {{api}}/inventories/{{inventory.response.body.$.id}}/counts
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "items": [ { "variantId": "b0000000-0000-0000-0000-00000000be03", "countedQty": 40 } ] }
+
+### 27. Провести: разница уходит движением склада (продажи после подсчёта не теряются)
+POST {{api}}/inventories/{{inventory.response.body.$.id}}/post
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 28. Остаток колбасы после инвентаризации — 40
+GET {{api}}/products/b0000000-0000-0000-0000-00000000be02
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 29. Новая касса для синхронизации (касса из шага 3 отключена в шаге 17): код
+# @name code2
+POST {{api}}/devices/enrollment-codes
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 30. Касса обменивает код
+# @name device2
+POST {{api}}/devices/enroll
+Content-Type: application/json
+
+{ "code": "{{code2.response.body.$.code}}", "name": "Касса без связи" }
+
+### 31. Кассир входит по PIN
+# @name cashier2
+POST {{api}}/auth/pin
+Authorization: Device {{device2.response.body.$.deviceId}}.{{device2.response.body.$.deviceSecret}}
+Content-Type: application/json
+
+{ "login": "cashier1_1", "pin": "1234" }
+
+### 32. Пачка с кассы: смена, открытая без связи. Ответ — статус по каждому документу
+# @name push1
+POST {{api}}/sync/push
+Authorization: Bearer {{cashier2.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "shifts": [ { "id": "{{$guid}}", "openingCash": 0 } ] }
+
+### 33. Пачка чеков: хороший (accepted) и с неверной суммой оплат (rejected) — пачка не падает
+POST {{api}}/sync/push
+Authorization: Bearer {{cashier2.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "sales": [
+    { "id": "{{$guid}}", "shiftId": "{{push1.response.body.$.shifts[0].id}}", "localNumber": 1, "createdAtLocal": "{{$datetime iso8601}}",
+      "items": [ { "id": "{{$guid}}", "variantId": "b0000000-0000-0000-0000-00000000be03", "qty": 1.000, "price": 520.00 } ],
+      "payments": [ { "id": "{{$guid}}", "method": "cash", "amount": 520.00 } ] },
+    { "id": "{{$guid}}", "shiftId": "{{push1.response.body.$.shifts[0].id}}", "localNumber": 2, "createdAtLocal": "{{$datetime iso8601}}",
+      "items": [ { "id": "{{$guid}}", "variantId": "b0000000-0000-0000-0000-00000000be03", "qty": 1.000, "price": 520.00 } ],
+      "payments": [ { "id": "{{$guid}}", "method": "cash", "amount": 1.00 } ] }
+  ]
+}
+
+### 34. Пачка: закрытие смены
+POST {{api}}/sync/push
+Authorization: Bearer {{cashier2.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "closes": [ { "shiftId": "{{push1.response.body.$.shifts[0].id}}", "closingCash": 520 } ] }
+
+### 35. Касса забирает пары: первая страница (next — курсор «последней синхронизации»)
+# @name variants
+GET {{api}}/sync/variants?limit=3
+Authorization: Bearer {{cashier2.response.body.$.accessToken}}
+
+### 36. Изменения после курсора
+GET {{api}}/sync/variants?after={{variants.response.body.$.next}}&limit=3
+Authorization: Bearer {{cashier2.response.body.$.accessToken}}
+
+### 37. Цены листа филиала (лист снят в шаге 23: priceListId = null, у кассы базовые цены)
+GET {{api}}/sync/prices
+Authorization: Bearer {{cashier2.response.body.$.accessToken}}
