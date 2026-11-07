@@ -24,16 +24,23 @@ public sealed class CatalogService(IProductCatalog catalog, ITenantContext tenan
         return catalog.FindByBarcodeAsync(code, store, ct);
     }
 
-    /// <summary>50 товаров, чьё название содержит строку, со всеми их парами.</summary>
+    /// <summary>
+    /// До 50 товаров, чьё название содержит строку, со всеми их парами, по названию.
+    /// Совпадений больше 50 — вернутся 50 любых из них: кассир уточняет запрос.
+    /// («Первые 50 по алфавиту» потребовали бы сортировать все совпадения, и
+    /// частый запрос снова рос бы вместе с числом товаров.)
+    /// </summary>
     public Task<IReadOnlyList<SearchProductView>> SearchAsync(string query, CancellationToken ct)
     {
+        // От 3 символов: поиск идёт по триграммам, из двух букв индекс не построить
+        // (см. db/migrations/0003_product_search.sql).
         var q = query.Trim();
-        if (q.Length is < 2 or > 100)
+        if (q.Length is < 3 or > 100)
         {
-            throw new CatalogValidationException("Поиск: от 2 до 100 символов.");
+            throw new CatalogValidationException("Поиск: от 3 до 100 символов.");
         }
 
-        return catalog.SearchByNameAsync(EscapeLike(q), SearchLimit, ct);
+        return catalog.SearchByNameAsync(q, SearchLimit, ct);
     }
 
     public Task<ProductView?> GetAsync(Guid productId, CancellationToken ct) =>
@@ -125,8 +132,4 @@ public sealed class CatalogService(IProductCatalog catalog, ITenantContext tenan
             throw new CatalogValidationException($"{field}: до {max} символов.");
         }
     }
-
-    /// <summary>Экранирует % _ \ — строка пользователя ищется буквально.</summary>
-    private static string EscapeLike(string s) =>
-        s.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
 }

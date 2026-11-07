@@ -13,6 +13,9 @@ public static class DependencyInjection
 {
     public const string ConnectionStringName = "Kassir";
 
+    /// <summary>Потолок пула соединений к Postgres на экземпляр API, если в строке подключения не задан.</summary>
+    public const int DefaultMaxPoolSize = 30;
+
     /// <summary>Postgres, вход (пароль/PIN, JWT), товары, health check.</summary>
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
@@ -24,9 +27,23 @@ public static class DependencyInjection
                 $"Задайте её переменной окружения ConnectionStrings__{ConnectionStringName}.");
         }
 
+        // Потолок пула. По умолчанию у Npgsql 100 — ровно max_connections Postgres:
+        // всплеск запросов к одному экземпляру API занимал все соединения базы,
+        // и новые получали «too many clients» (500) вместо ожидания. С потолком
+        // лишние запросы ждут свободное соединение. 30 — с большим запасом: скан
+        // держит соединение ≈ 1 мс, поиск ≈ 2 мс. Явное значение в строке
+        // подключения (Maximum Pool Size=…) важнее этого.
+        var csb = new NpgsqlConnectionStringBuilder(connectionString);
+        if (!connectionString.Contains("Maximum Pool Size", StringComparison.OrdinalIgnoreCase)
+            && !connectionString.Contains("MaxPoolSize", StringComparison.OrdinalIgnoreCase))
+        {
+            csb.MaxPoolSize = DefaultMaxPoolSize;
+        }
+
         // Один пул соединений на приложение. Сам NpgsqlDataSource в DI не попадает —
         // только внутренняя обёртка (см. KassirDataSource).
-        services.AddSingleton(_ => new KassirDataSource(NpgsqlDataSource.Create(connectionString)));
+        var poolConnectionString = csb.ConnectionString;
+        services.AddSingleton(_ => new KassirDataSource(NpgsqlDataSource.Create(poolConnectionString)));
         services.AddScoped<TenantDb>();
 
         services.AddSingleton(JwtOptions.FromConfiguration(configuration));

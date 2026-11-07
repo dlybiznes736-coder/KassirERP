@@ -297,29 +297,27 @@ LEFT JOIN stock s ON s.tenant_id = v.tenant_id AND s.store_id = {store} AND s.va
 WHERE v.barcode = {bc_missing} AND v.deleted_at IS NULL
 $q$);
 
-CALL bench.run('Поиск по названию — редкий запрос «кроссовки runner» (50 товаров со всеми парами)', 'ix_products_name_trgm', 50, $q$
+-- Поиск — через catalog.search_products (миграция 0003), как в API. Индекс
+-- ix_products_search используется внутри функции, поэтому в плане внешнего
+-- запроса его не видно (колонка «Индекс в плане» — «—»). Внутренний план:
+-- db/bench/search_explain.sql (auto_explain).
+CALL bench.run('Поиск по названию — редкий запрос «кроссовки runner» (50 товаров со всеми парами)', NULL, 50, $q$
 SELECT p.id, p.name, p.brand, v.id AS variant_id, v.size, v.color, v.sale_price
-FROM (SELECT id, name, brand FROM products
-      WHERE deleted_at IS NULL AND name ILIKE '%' || {q_rare} || '%'
-      ORDER BY name, id LIMIT 50) p
+FROM catalog.search_products({q_rare}, 50) p
 JOIN product_variants v ON v.product_id = p.id AND v.deleted_at IS NULL
 ORDER BY p.name, p.id, v.size, v.color
 $q$);
 
-CALL bench.run('Поиск по названию — частый запрос «кроссовки» (50 товаров со всеми парами)', 'ix_products_name_trgm', 50, $q$
+CALL bench.run('Поиск по названию — частый запрос «кроссовки» (50 товаров со всеми парами)', NULL, 50, $q$
 SELECT p.id, p.name, p.brand, v.id AS variant_id, v.size, v.color, v.sale_price
-FROM (SELECT id, name, brand FROM products
-      WHERE deleted_at IS NULL AND name ILIKE '%' || {q_freq} || '%'
-      ORDER BY name, id LIMIT 50) p
+FROM catalog.search_products({q_freq}, 50) p
 JOIN product_variants v ON v.product_id = p.id AND v.deleted_at IS NULL
 ORDER BY p.name, p.id, v.size, v.color
 $q$);
 
-CALL bench.run('Поиск по названию — короткий запрос «run» (50 товаров со всеми парами)', 'ix_products_name_trgm', 50, $q$
+CALL bench.run('Поиск по названию — короткий запрос «run» (50 товаров со всеми парами)', NULL, 50, $q$
 SELECT p.id, p.name, p.brand, v.id AS variant_id, v.size, v.color, v.sale_price
-FROM (SELECT id, name, brand FROM products
-      WHERE deleted_at IS NULL AND name ILIKE '%' || {q_short} || '%'
-      ORDER BY name, id LIMIT 50) p
+FROM catalog.search_products({q_short}, 50) p
 JOIN product_variants v ON v.product_id = p.id AND v.deleted_at IS NULL
 ORDER BY p.name, p.id, v.size, v.color
 $q$);
@@ -509,7 +507,7 @@ SELECT E'## Итог по запросам\n\n'
   '|--:|---|---|:-:|--:|--:|--:|--:|---|\n' ||
   string_agg(format('| %s | %s | %s | %s | %s | %s мс | %s мс | %s | %s |',
     ord, label,
-    CASE WHEN idx IS NULL THEN '— (Seq Scan)' ELSE '`' || idx || '`' END,
+    CASE WHEN idx IS NULL THEN '—' ELSE '`' || idx || '`' END,
     CASE WHEN idx IS NULL THEN '—' WHEN position(idx IN plan) > 0 THEN 'да' ELSE '**нет**' END,
     coalesce('< ' || target_ms || ' мс', '—'),
     median_ms, first_ms, rows_out,
@@ -532,7 +530,7 @@ SELECT E'## Запросы подробно\n\n' ||
     ord, label,
     coalesce('< ' || target_ms || ' мс', 'нет'),
     median_ms, runs, first_ms, min_ms, max_ms,
-    CASE WHEN idx IS NULL THEN 'не нужен (Seq Scan)' ELSE '`' || idx || '`' END,
+    CASE WHEN idx IS NULL THEN '— (см. комментарий в bench.sql)' ELSE '`' || idx || '`' END,
     CASE WHEN target_ms IS NULL THEN 'цели в ТЗ нет, для справки'
          WHEN median_ms < target_ms THEN 'ПРОЙДЕНО'
          ELSE 'НЕ ПРОЙДЕНО' END,

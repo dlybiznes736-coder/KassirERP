@@ -23,14 +23,13 @@ internal sealed class ProductCatalog(TenantDb db) : IProductCatalog
         WHERE v.barcode = $1 AND v.deleted_at IS NULL AND p.deleted_at IS NULL
         """;
 
-    // Поиск — переписанный запрос из bench.sql: сначала LIMIT по products,
-    // потом все пары этих товаров. ILIKE с экранированным шаблоном.
+    // Поиск: сначала до $2 товаров (catalog.search_products — индекс
+    // ix_products_search, миграция 0003), потом все пары этих товаров.
+    // Пары читаются уже под RLS, как обычно.
     private const string SearchSql =
         """
         SELECT p.id, p.name, p.brand, p.article, v.id, v.size, v.color, v.barcode, v.sale_price
-        FROM (SELECT id, name, brand, article FROM products
-              WHERE deleted_at IS NULL AND name ILIKE '%' || $1 || '%'
-              ORDER BY name, id LIMIT $2) p
+        FROM catalog.search_products($1, $2) p
         JOIN product_variants v ON v.product_id = p.id AND v.deleted_at IS NULL
         ORDER BY p.name, p.id, v.size, v.color
         """;
@@ -74,8 +73,8 @@ internal sealed class ProductCatalog(TenantDb db) : IProductCatalog
                 reader.GetString(5), reader.GetString(6), reader.GetString(7), reader.GetDecimal(8), reader.GetDecimal(9));
         }, ct);
 
-    public Task<IReadOnlyList<SearchProductView>> SearchByNameAsync(string pattern, int limit, CancellationToken ct) =>
-        db.ReadAsync<IReadOnlyList<SearchProductView>>([Command(SearchSql, pattern, limit)], async reader =>
+    public Task<IReadOnlyList<SearchProductView>> SearchByNameAsync(string query, int limit, CancellationToken ct) =>
+        db.ReadAsync<IReadOnlyList<SearchProductView>>([Command(SearchSql, query, limit)], async reader =>
         {
             var products = new List<SearchProductView>();
             List<SearchVariantView>? variants = null;

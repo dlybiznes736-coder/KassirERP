@@ -137,6 +137,17 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN ok := true; END;
   ASSERT ok, 'удалось записать в чужой тенант';
   RAISE NOTICE 'OK  RLS: чужой тенант не виден и не пишется';
+
+  -- 9. Поиск (миграция 0003): функция обходит RLS, поэтому проверяем её отдельно
+  IF to_regprocedure('catalog.search_products(text,integer)') IS NOT NULL THEN
+    ASSERT (SELECT count(*) FROM catalog.search_products('Runner', 50)) = 1, 'свой товар не найден';
+    ASSERT (SELECT count(*) FROM catalog.search_products('товар', 50)) = 0, 'поиск отдал товар чужого тенанта';
+    ASSERT (SELECT count(*) FROM catalog.search_products('%%%', 50)) = 0, '%%% в запросе сработал как шаблон';
+    PERFORM set_config('app.tenant_id', '', true);
+    ASSERT (SELECT count(*) FROM catalog.search_products('Runner', 50)) = 0, 'без тенанта поиск что-то вернул';
+    PERFORM set_config('app.tenant_id', t::text, true);
+    RAISE NOTICE 'OK  поиск: только свой тенант, без тенанта — пусто, %% буквально';
+  END IF;
 END $$;
 
 ROLLBACK;

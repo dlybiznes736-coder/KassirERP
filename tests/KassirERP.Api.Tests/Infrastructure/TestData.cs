@@ -15,13 +15,14 @@ public sealed class TestData
     public required TestTenant A { get; init; }
     public required TestTenant B { get; init; }
 
-    public static TestData Create()
+    /// <param name="extraCashiers">Дополнительные кассиры фирмы A: cashier-01…, PIN 4821, филиал A.</param>
+    public static TestData Create(int extraCashiers = 0)
     {
         var suffix = Guid.NewGuid().ToString("N")[..8];
-        return new TestData { Suffix = suffix, A = Tenant("a", suffix, stock: 7), B = Tenant("b", suffix, stock: 3) };
+        return new TestData { Suffix = suffix, A = Tenant("a", suffix, stock: 7, extraCashiers), B = Tenant("b", suffix, stock: 3, 0) };
     }
 
-    private static TestTenant Tenant(string letter, string suffix, decimal stock)
+    private static TestTenant Tenant(string letter, string suffix, decimal stock, int extraCashiers)
     {
         var store = Guid.NewGuid();
         var users = new Dictionary<string, TestUser>
@@ -37,6 +38,11 @@ public sealed class TestData
             // Кассир без филиала: PIN-вход ему запрещён.
             ["nostore"] = new(Guid.NewGuid(), "cashier-nostore", null, "2468", null, "cashier"),
         };
+        for (var i = 1; i <= extraCashiers; i++)
+        {
+            var login = $"cashier-{i:D2}";
+            users[login] = new(Guid.NewGuid(), login, null, "4821", store, "cashier");
+        }
 
         return new TestTenant(Guid.NewGuid(), $"test-{letter}-{suffix}", store, Guid.NewGuid(), Guid.NewGuid(),
             $"T{letter.ToUpperInvariant()}{suffix}", $"Изоляция {suffix} товар {letter.ToUpperInvariant()}", stock, users);

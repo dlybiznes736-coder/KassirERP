@@ -36,7 +36,8 @@ public sealed record WriteResult(WriteStatus Status, string? Detail = null);
 public interface IProductCatalog
 {
     Task<ScanView?> FindByBarcodeAsync(string barcode, Guid storeId, CancellationToken ct);
-    Task<IReadOnlyList<SearchProductView>> SearchByNameAsync(string pattern, int limit, CancellationToken ct);
+    /// <summary>До limit товаров, чьё название содержит query (буквально, без шаблонов), со всеми парами.</summary>
+    Task<IReadOnlyList<SearchProductView>> SearchByNameAsync(string query, int limit, CancellationToken ct);
     Task<ProductView?> GetAsync(Guid productId, Guid? storeId, CancellationToken ct);
     Task<WriteResult> CreateAsync(NewProduct product, CancellationToken ct);
     Task<WriteResult> AddVariantsAsync(Guid productId, IReadOnlyList<NewVariant> variants, CancellationToken ct);

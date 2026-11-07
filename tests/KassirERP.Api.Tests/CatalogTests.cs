@@ -106,7 +106,8 @@ public sealed class CatalogTests(KassirApiFactory factory)
     }
 
     [Theory]
-    [InlineData("x")]       // короче 2 символов
+    [InlineData("x")]
+    [InlineData("zq")]      // 2 символа: ни одной триграммы, индекс не помогает
     [InlineData("  ")]
     public async Task Too_short_search_is_bad_request(string q)
     {
@@ -122,8 +123,8 @@ public sealed class CatalogTests(KassirApiFactory factory)
     {
         var cashier = await _client.LoginAsync(_data.A, "cashier");
 
-        // «%%» без экранирования нашёл бы все товары.
-        var response = await _client.SendAsync(ApiClient.Get("/products/search?q=%25%25", cashier.AccessToken));
+        // «%%%» без экранирования нашёл бы все товары.
+        var response = await _client.SendAsync(ApiClient.Get("/products/search?q=%25%25%25", cashier.AccessToken));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(0, (await response.JsonAsync()).GetArrayLength());

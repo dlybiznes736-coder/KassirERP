@@ -11,8 +11,12 @@
 // Плюс две базовые линии без базы: /health/live (только HTTP) и /auth/me
 // (HTTP + проверка JWT). «Бэкенд добавил» = API − Npgsql.
 //
+// Нужна база после generate.sql: фирма «bench» и пользователь «bench» есть
+// только там (их создаёт генератор, миграции — нет). Утилита в базу не пишет.
+//
 // Запуск (API уже работает в Release, см. db/bench/API_REPORT.md):
 //   dotnet run -c Release --project tools/KassirERP.ApiBench -- --out db/bench/API_REPORT.md
+//   ... -- --app-cs "Host=...;Database=kassir_x3;..." --out x3.md   (другая база)
 // =====================================================================
 using System.Diagnostics;
 using System.Globalization;
@@ -20,45 +24,48 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using KassirERP.Infrastructure.Auth;
 using Npgsql;
 
 var api = Arg("--api", "http://localhost:5260");
 var appCs = Arg("--app-cs", "Host=localhost;Port=15432;Database=kassir;Username=kassir_app;Password=kassir_app_dev");
-var adminCs = Arg("--admin-cs", "Host=localhost;Port=15432;Database=kassir;Username=postgres;Password=postgres_dev");
 var outPath = Arg("--out", "API_REPORT.md");
 var scans = int.Parse(Arg("--scans", "2000"), CultureInfo.InvariantCulture);
 var searches = int.Parse(Arg("--searches", "300"), CultureInfo.InvariantCulture);
 const int Warmup = 200;
 
-var tenant = Guid.Parse("c0000000-0000-0000-0000-000000000001"); // основной тенант generate.sql
+// Стенд из generate.sql.
+const string BenchTenantCode = "bench";
 const string BenchLogin = "bench";
 const string BenchPassword = "bench-password-1";
 
-// --- Подготовка: код фирмы и пользователь для входа ---------------------
-Guid store;
-int variantCount;
-await using (var admin = new NpgsqlConnection(adminCs))
+using var http = new HttpClient { BaseAddress = new Uri(api) };
+var login = await http.PostAsJsonAsync("/auth/login", new { tenantCode = BenchTenantCode, login = BenchLogin, password = BenchPassword });
+if (!login.IsSuccessStatusCode)
 {
-    await admin.OpenAsync();
-    store = (Guid)(await Scalar(admin, """
-        SELECT store_id FROM sales WHERE tenant_id = $1 AND device_id NOT LIKE 'bench-%'
-        GROUP BY store_id ORDER BY count(*) DESC, store_id LIMIT 1
-        """, tenant))!;
-    variantCount = (int)(long)(await Scalar(admin, "SELECT count(*) FROM product_variants WHERE tenant_id = $1 AND barcode LIKE '46%'", tenant))!;
-    await Scalar(admin, "UPDATE tenants SET code = 'bench' WHERE id = $1 AND code IS NULL", tenant);
-    await Scalar(admin, """
-        INSERT INTO users (id, tenant_id, store_id, full_name, login, role, password_hash)
-        VALUES ('b0000000-0000-0000-0000-00000000be01', $1, $2, 'Замер API', $3, 'storekeeper', $4)
-        ON CONFLICT (id) DO UPDATE SET store_id = EXCLUDED.store_id, password_hash = EXCLUDED.password_hash
-        """, tenant, store, BenchLogin, new Pbkdf2PasswordHasher().Hash(BenchPassword));
+    Console.Error.WriteLine($"Вход bench/bench не удался ({(int)login.StatusCode}). Стенд создаёт только db/bench/generate.sql.");
+    return;
 }
 
-using var http = new HttpClient { BaseAddress = new Uri(api) };
-var login = await http.PostAsJsonAsync("/auth/login", new { tenantCode = "bench", login = BenchLogin, password = BenchPassword });
-login.EnsureSuccessStatusCode();
-var token = (await login.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("accessToken").GetString()!;
-http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+var session = await login.Content.ReadFromJsonAsync<JsonElement>();
+http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", session.GetProperty("accessToken").GetString());
+var tenant = session.GetProperty("tenantId").GetGuid();
+var store = session.GetProperty("storeId").GetGuid();
+
+await using var dataSource = NpgsqlDataSource.Create(appCs);
+int variantCount;
+int productCount;
+await using (var connection = await dataSource.OpenConnectionAsync())
+await using (var batch = new NpgsqlBatch(connection))
+{
+    // Под RLS, как приложение: видно только свою фирму.
+    batch.BatchCommands.Add(new NpgsqlBatchCommand("SELECT set_config('app.tenant_id', $1, true)") { Parameters = { new() { Value = tenant.ToString() } } });
+    batch.BatchCommands.Add(new NpgsqlBatchCommand("SELECT (SELECT count(*) FROM product_variants WHERE barcode LIKE '46%'), (SELECT count(*) FROM products)"));
+    await using var reader = await batch.ExecuteReaderAsync();
+    await reader.NextResultAsync();
+    await reader.ReadAsync();
+    variantCount = (int)reader.GetInt64(0);
+    productCount = (int)reader.GetInt64(1);
+}
 
 // Свой набор случайных пар у каждого уровня: иначе первый уровень прогревает
 // кэш Postgres для второго.
@@ -85,14 +92,11 @@ const string ScanSql = """
     """;
 const string SearchSql = """
     SELECT p.id, p.name, p.brand, p.article, v.id, v.size, v.color, v.barcode, v.sale_price
-    FROM (SELECT id, name, brand, article FROM products
-          WHERE deleted_at IS NULL AND name ILIKE '%' || $1 || '%'
-          ORDER BY name, id LIMIT $2) p
+    FROM catalog.search_products($1, $2) p
     JOIN product_variants v ON v.product_id = p.id AND v.deleted_at IS NULL
     ORDER BY p.name, p.id, v.size, v.color
     """;
 
-await using var dataSource = NpgsqlDataSource.Create(appCs);
 var rows = new List<Row>();
 
 Console.WriteLine("== Базовые линии");
@@ -112,23 +116,22 @@ var explainBarcodes = RandomBarcodes(seed + 2);
 rows.Add(new Row($"Скан: случайные пары из {variantCount:N0}", null,
     await ExplainMedian(ScanSql, [Lit(explainBarcodes[0]), Lit(store)], 100, i => [Lit(explainBarcodes[i]), Lit(store)]), coldDb, coldApi));
 
-double[] reference = [42.796, 43.925, 36.906];
 for (var q = 0; q < queries.Length; q++)
 {
     var query = queries[q];
     Console.WriteLine($"== Поиск «{query}»");
     var (searchDb, searchApi) = await MeasurePair(Warmup / 4 + searches,
         _ => DbRead(SearchSql, query, 50), _ => HttpGet($"/products/search?q={Uri.EscapeDataString(query)}"));
-    rows.Add(new Row($"Поиск «{query}» (50 товаров со всеми парами)", reference[q],
+    rows.Add(new Row($"Поиск «{query}» (до 50 товаров со всеми парами)", null,
         await ExplainMedian(SearchSql, [Lit(query), "50"], 9, _ => [Lit(query), "50"]), searchDb, searchApi));
 }
 
 // --- Отчёт -----------------------------------------------------------------
 var md = new StringBuilder();
-md.AppendLine("# Kassir ERP — время ответа API поверх базы (бэкенд, шаг 3)");
+md.AppendLine("# Kassir ERP — время ответа API поверх базы");
 md.AppendLine();
 md.AppendLine(CultureInfo.InvariantCulture, $"Дата: {DateTime.Now:yyyy-MM-dd HH:mm} · API {api} (Release, Production) · один клиент, запросы подряд · " +
-              $"скан: {scans} случайных пар из {variantCount:N0}, поиск: {searches} повторов на запрос, перед каждой серией разогрев.");
+              $"товаров у фирмы: {productCount:N0}, пар: {variantCount:N0} · скан: {scans} случайных пар, поиск: {searches} повторов на запрос, перед каждой серией разогрев.");
 md.AppendLine();
 md.AppendLine("Уровни меряются вперемешку (запрос к Npgsql, запрос к API, и наоборот), у каждого свой набор случайных пар — чтобы один не прогревал кэш другому.");
 md.AppendLine();
@@ -142,7 +145,7 @@ foreach (var r in rows)
 {
     md.AppendLine(CultureInfo.InvariantCulture,
         $"| {r.Name} | {(r.Reference is { } refMs ? refMs.ToString("0.000", CultureInfo.InvariantCulture) + " мс" : "—")} | {r.Explain:0.000} мс | {r.Db.P50:0.00} мс | {r.Api.P50:0.00} мс | {r.Api.P95:0.00} мс | {r.Api.P99:0.00} мс | " +
-        $"+{r.Api.P50 - r.Db.P50:0.00} мс | +{r.Api.P95 - r.Db.P95:0.00} мс |");
+        $"{r.Api.P50 - r.Db.P50:+0.00;-0.00} мс | {r.Api.P95 - r.Db.P95:+0.00;-0.00} мс |");
 }
 
 md.AppendLine();
@@ -264,16 +267,6 @@ static Stats ToStats(List<double> samples)
     return new Stats(samples.Count, samples.Average(), P(0.50), P(0.95), P(0.99), samples[^1]);
 }
 
-static async Task<object?> Scalar(NpgsqlConnection connection, string sql, params object[] args)
-{
-    await using var command = new NpgsqlCommand(sql, connection);
-    foreach (var arg in args)
-    {
-        command.Parameters.Add(new NpgsqlParameter { Value = arg });
-    }
-
-    return await command.ExecuteScalarAsync();
-}
 
 internal sealed record Stats(int Count, double Mean, double P50, double P95, double P99, double Max);
 

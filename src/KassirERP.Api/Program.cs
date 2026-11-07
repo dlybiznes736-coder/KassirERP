@@ -10,6 +10,7 @@ using KassirERP.Infrastructure;
 using KassirERP.Infrastructure.Auth;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,15 +34,37 @@ builder.Services
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy(ProductEndpoints.CatalogWritePolicy, policy => policy.RequireRole(Roles.CatalogWriters));
 
-// --- Вход: ограничение частоты по IP поверх блокировки учётки ----------
-var authPerMinute = builder.Configuration.GetValue("RateLimits:AuthPerMinute", 30);
+// --- Вход: лимит по IP поверх блокировки учётки (расчёт — AuthRateLimitOptions)
+// За обратным прокси нужен UseForwardedHeaders, иначе все клиенты — один IP прокси.
+builder.Services.Configure<AuthRateLimitOptions>(builder.Configuration.GetSection(AuthRateLimitOptions.Section));
 builder.Services.AddRateLimiter(options =>
 {
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.AddPolicy(AuthEndpoints.RateLimitPolicy, context =>
-        RateLimitPartition.GetFixedWindowLimiter(
+    {
+        var limits = context.RequestServices.GetRequiredService<IOptions<AuthRateLimitOptions>>().Value;
+        var perMinute = Math.Max(1, limits.TokensPerMinute);
+        return RateLimitPartition.GetTokenBucketLimiter(
             context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            _ => new FixedWindowRateLimiterOptions { PermitLimit = authPerMinute, Window = TimeSpan.FromMinutes(1) }));
+            _ => new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = Math.Max(1, limits.TokenLimit),
+                TokensPerPeriod = 1,
+                ReplenishmentPeriod = TimeSpan.FromMinutes(1) / perMinute,
+                QueueLimit = 0,
+                AutoReplenishment = true,
+            });
+    });
+    options.OnRejected = (context, ct) =>
+    {
+        var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var wait) ? wait : TimeSpan.FromSeconds(1);
+        var seconds = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds));
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.HttpContext.Response.Headers.RetryAfter = seconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return new ValueTask(Results.Problem(
+            statusCode: StatusCodes.Status429TooManyRequests,
+            title: "Слишком много запросов на вход с этого адреса",
+            detail: $"Повторите через {seconds} с.").ExecuteAsync(context.HttpContext));
+    };
 });
 
 // --- JSON: неизвестное поле в теле (например tenantId) — 400 -----------

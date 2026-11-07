@@ -17,6 +17,9 @@ services:
       - timezone=UTC
       - -c
       - log_min_duration_statement=200
+    # /dev/shm в Docker по умолчанию 64 МБ: параллельным запросам и VACUUM на
+    # больших таблицах этого мало («could not resize shared memory segment»).
+    shm_size: 512mb
     # Наружу — 15432: на машине разработки 5432 и 5433 часто заняты локальными
     # Postgres (службы Windows), и localhost молча уходит в чужую базу.
     ports:
@@ -26,6 +29,7 @@ services:
       # Выполняется только при первом запуске на пустом томе.
       - ./db/kassir_schema_v1.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
       - ./db/migrations/0002_auth.sql:/docker-entrypoint-initdb.d/02_auth.sql:ro
+      - ./db/migrations/0003_product_search.sql:/docker-entrypoint-initdb.d/03_product_search.sql:ro
       - ./db:/db:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d kassir"]
