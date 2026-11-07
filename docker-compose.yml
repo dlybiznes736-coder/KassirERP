@@ -25,6 +25,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       # Выполняется только при первом запуске на пустом томе.
       - ./db/kassir_schema_v1.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./db/migrations/0002_auth.sql:/docker-entrypoint-initdb.d/02_auth.sql:ro
       - ./db:/db:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d kassir"]

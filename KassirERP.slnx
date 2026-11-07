@@ -5,4 +5,10 @@
     <Project Path="src/KassirERP.Domain/KassirERP.Domain.csproj" />
     <Project Path="src/KassirERP.Infrastructure/KassirERP.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KassirERP.Api.Tests/KassirERP.Api.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/KassirERP.ApiBench/KassirERP.ApiBench.csproj" />
+  </Folder>
 </Solution>

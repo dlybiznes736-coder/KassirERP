@@ -8,13 +8,13 @@ namespace KassirERP.Infrastructure.Persistence;
 /// Роль с SUPERUSER или BYPASSRLS обходит Row Level Security (принцип 8 ТЗ),
 /// поэтому такое подключение считается неисправным, даже если база отвечает.
 /// </summary>
-internal sealed class PostgresHealthCheck(NpgsqlDataSource dataSource) : IHealthCheck
+internal sealed class PostgresHealthCheck(KassirDataSource dataSource) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
     {
         try
         {
-            await using var command = dataSource.CreateCommand(
+            await using var command = dataSource.Inner.CreateCommand(
                 """
                 SELECT current_user,
                        current_setting('server_version'),
