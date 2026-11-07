@@ -24,6 +24,7 @@ DECLARE
   pu  uuid := 'a0000000-0000-0000-0000-000000000007';
   pu2 uuid := 'a0000000-0000-0000-0000-000000000008';
   sh  uuid := 'a0000000-0000-0000-0000-000000000009';
+  dv  uuid := 'a0000000-0000-0000-0000-00000000000d';
   sa  uuid := 'a0000000-0000-0000-0000-000000000010';
   si  uuid := 'a0000000-0000-0000-0000-000000000011';
   ret uuid := 'a0000000-0000-0000-0000-000000000020';
@@ -48,11 +49,12 @@ BEGIN
 
   -- 2. Продажа 2 пар: две строки одной пары одним INSERT (как чек с кассы) —
   --    триггер обязан свернуть их в одно обновление stock
+  INSERT INTO devices (id, tenant_id, store_id, name, secret_hash) VALUES (dv, t, st, 'Касса 1', 'none');
   INSERT INTO cash_shifts (id, tenant_id, store_id, device_id, cashier_id, opened_at)
-    VALUES (sh, t, st, 'kassa-1', usr, now());
+    VALUES (sh, t, st, dv, usr, now());
   INSERT INTO sales (id, tenant_id, store_id, shift_id, cashier_id, device_id, local_number,
                      subtotal, total, created_at_local)
-    VALUES (sa, t, st, sh, usr, 'kassa-1', 1, 9980.00, 9980.00, now());
+    VALUES (sa, t, st, sh, usr, dv, 1, 9980.00, 9980.00, now());
   INSERT INTO sale_items (id, tenant_id, sale_id, variant_id, qty, price, cost_price, total)
     VALUES (si,        t, sa, v, 1, 4990.00, 2500.00, 4990.00),
            (uuid_v7(), t, sa, v, 1, 4990.00, 2500.00, 4990.00);
@@ -68,7 +70,7 @@ BEGIN
   BEGIN
     INSERT INTO sales (id, tenant_id, store_id, shift_id, cashier_id, device_id, local_number,
                        subtotal, total, created_at_local)
-      VALUES (sa, t, st, sh, usr, 'kassa-1', 1, 9980.00, 9980.00, now());
+      VALUES (sa, t, st, sh, usr, dv, 1, 9980.00, 9980.00, now());
   EXCEPTION WHEN unique_violation THEN ok := true;
   END;
   ASSERT ok, 'повторный чек не отклонён';
@@ -83,7 +85,7 @@ BEGIN
   -- 5. Возврат 1 пары
   INSERT INTO sales (id, tenant_id, store_id, shift_id, cashier_id, device_id, local_number,
                      type, return_of_sale_id, subtotal, total, created_at_local)
-    VALUES (ret, t, st, sh, usr, 'kassa-1', 2, 'return', sa, 4990.00, 4990.00, now());
+    VALUES (ret, t, st, sh, usr, dv, 2, 'return', sa, 4990.00, 4990.00, now());
   INSERT INTO sale_items (id, tenant_id, sale_id, variant_id, return_of_item_id, qty, price, cost_price, total)
     VALUES (uuid_v7(), t, ret, v, si, 1, 4990.00, 2500.00, 4990.00);
   SELECT qty INTO n FROM stock WHERE store_id = st AND variant_id = v;

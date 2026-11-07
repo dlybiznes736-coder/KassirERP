@@ -1,3 +1,5 @@
+using KassirERP.Application.Devices;
+
 namespace KassirERP.Application.Auth;
 
 public enum LoginStatus
@@ -5,15 +7,17 @@ public enum LoginStatus
     Success,
     InvalidCredentials,
     LockedOut,
-    /// <summary>Вход по PIN — только для сотрудника, привязанного к филиалу.</summary>
-    StoreRequired,
+    /// <summary>Касса неизвестна, отключена или её секрет неверен.</summary>
+    InvalidDevice,
+    /// <summary>Кассир привязан к другому филиалу, не к филиалу кассы.</summary>
+    StoreMismatch,
     /// <summary>Выбранный филиал не принадлежит фирме или недоступен пользователю.</summary>
     InvalidStore,
 }
 
 public sealed record LoginResult(LoginStatus Status, IssuedToken? Token = null, TimeSpan RetryAfter = default, TokenSubject? Subject = null);
 
-/// <summary>Вход по паролю (веб) и по PIN (касса).</summary>
+/// <summary>Вход по паролю (веб) и по PIN (только с зарегистрированной кассы).</summary>
 public sealed class AuthService(IAuthStore store, IPasswordHasher hasher, ITokenIssuer tokens)
 {
     public const int MaxPasswordAttempts = 10;
@@ -24,42 +28,16 @@ public sealed class AuthService(IAuthStore store, IPasswordHasher hasher, IToken
     // чтобы по времени ответа нельзя было узнать, есть ли такой логин.
     private readonly Lazy<string> _dummyHash = new(() => hasher.Hash("dummy-" + Guid.NewGuid()));
 
-    public Task<LoginResult> LoginWithPasswordAsync(string tenantCode, string login, string password, Guid? storeId, CancellationToken ct) =>
-        LoginAsync(tenantCode, login, password, CredentialKind.Password, storeId, ct);
-
-    public Task<LoginResult> LoginWithPinAsync(string tenantCode, string login, string pin, CancellationToken ct) =>
-        LoginAsync(tenantCode, login, pin, CredentialKind.Pin, storeId: null, ct);
-
-    private async Task<LoginResult> LoginAsync(string tenantCode, string login, string secret, CredentialKind kind, Guid? storeId, CancellationToken ct)
+    public async Task<LoginResult> LoginWithPasswordAsync(string tenantCode, string login, string password, Guid? storeId, CancellationToken ct)
     {
         var user = await store.FindUserAsync(tenantCode, login, ct);
-        var hash = kind == CredentialKind.Pin ? user?.PinHash : user?.PasswordHash;
-        if (user is null || hash is null)
+        var checkedUser = await CheckSecretAsync(user, user?.PasswordHash, password, CredentialKind.Password, MaxPasswordAttempts, ct);
+        if (checkedUser.Status != LoginStatus.Success)
         {
-            hasher.Verify(_dummyHash.Value, secret);
-            return new(LoginStatus.InvalidCredentials);
+            return checkedUser;
         }
 
-        var maxAttempts = kind == CredentialKind.Pin ? MaxPinAttempts : MaxPasswordAttempts;
-        var permit = await store.BeginAttemptAsync(user.UserId, kind, maxAttempts, LockDuration, ct);
-        if (!permit.Allowed)
-        {
-            return new(LoginStatus.LockedOut, RetryAfter: permit.RetryAfter);
-        }
-
-        if (!hasher.Verify(hash, secret))
-        {
-            return new(LoginStatus.InvalidCredentials);
-        }
-
-        await store.ResetAttemptsAsync(user.UserId, kind, ct);
-
-        Guid? tokenStore = user.StoreId;
-        if (kind == CredentialKind.Pin && user.StoreId is null)
-        {
-            return new(LoginStatus.StoreRequired);
-        }
-
+        Guid? tokenStore = user!.StoreId;
         if (storeId is { } requested && requested != user.StoreId)
         {
             // Привязанный к филиалу сотрудник другой выбрать не может;
@@ -72,7 +50,58 @@ public sealed class AuthService(IAuthStore store, IPasswordHasher hasher, IToken
             tokenStore = requested;
         }
 
-        var subject = new TokenSubject(user.UserId, user.TenantId, tokenStore, user.Role, kind);
-        return new(LoginStatus.Success, tokens.Issue(subject), Subject: subject);
+        return Issue(new TokenSubject(user.UserId, user.TenantId, tokenStore, user.Role, CredentialKind.Password));
     }
+
+    /// <summary>
+    /// Вход по PIN. Сначала касса: без её секрета PIN не проверяется вообще,
+    /// поэтому перебирать PIN можно только с самой кассы. Фирма и филиал — от кассы.
+    /// </summary>
+    public async Task<LoginResult> LoginWithPinAsync(Guid deviceId, string deviceSecret, string login, string pin, CancellationToken ct)
+    {
+        var device = await store.FindDeviceAsync(deviceId, ct);
+        if (device is null || device.Revoked || !DeviceSecrets.Matches(device.SecretHash, deviceSecret))
+        {
+            return new(LoginStatus.InvalidDevice);
+        }
+
+        var user = await store.FindUserInTenantAsync(device.TenantId, login, ct);
+        var checkedUser = await CheckSecretAsync(user, user?.PinHash, pin, CredentialKind.Pin, MaxPinAttempts, ct);
+        if (checkedUser.Status != LoginStatus.Success)
+        {
+            return checkedUser;
+        }
+
+        if (user!.StoreId is { } userStore && userStore != device.StoreId)
+        {
+            return new(LoginStatus.StoreMismatch);
+        }
+
+        return Issue(new TokenSubject(user.UserId, device.TenantId, device.StoreId, user.Role, CredentialKind.Pin, device.DeviceId));
+    }
+
+    private async Task<LoginResult> CheckSecretAsync(UserCredentials? user, string? hash, string secret, CredentialKind kind, int maxAttempts, CancellationToken ct)
+    {
+        if (user is null || hash is null)
+        {
+            hasher.Verify(_dummyHash.Value, secret);
+            return new(LoginStatus.InvalidCredentials);
+        }
+
+        var permit = await store.BeginAttemptAsync(user.UserId, kind, maxAttempts, LockDuration, ct);
+        if (!permit.Allowed)
+        {
+            return new(LoginStatus.LockedOut, RetryAfter: permit.RetryAfter);
+        }
+
+        if (!hasher.Verify(hash, secret))
+        {
+            return new(LoginStatus.InvalidCredentials);
+        }
+
+        await store.ResetAttemptsAsync(user.UserId, kind, ct);
+        return new(LoginStatus.Success);
+    }
+
+    private LoginResult Issue(TokenSubject subject) => new(LoginStatus.Success, tokens.Issue(subject), Subject: subject);
 }

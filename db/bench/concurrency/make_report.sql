@@ -130,7 +130,7 @@ FROM lk JOIN bench_conc.runs r USING (code);
 SELECT format(E'## Объём после теста\n\n'
   'Чеков с bench-касс: %s · товаров с телефонов: %s · движений в журнале: %s · строк `stock`: %s · '
   'остаток ходовой пары в филиале теста: %s (отрицательный остаток разрешён схемой).\n',
-  (SELECT count(*) FROM sales WHERE device_id LIKE 'bench-kassa-%'),
+  (SELECT count(*) FROM sales WHERE device_id IN (SELECT id FROM devices WHERE name LIKE 'bench-kassa-%')),
   (SELECT count(*) FROM products WHERE article LIKE 'PH-%'),
   (SELECT count(*) FROM stock_movements),
   (SELECT count(*) FROM stock),

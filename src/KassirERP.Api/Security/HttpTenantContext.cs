@@ -13,6 +13,7 @@ internal sealed class HttpTenantContext(IHttpContextAccessor accessor) : ITenant
     public Guid TenantId => RequiredGuid(JwtClaims.TenantId);
     public Guid UserId => RequiredGuid(JwtClaims.Subject);
     public Guid? StoreId => Guid.TryParse(Principal.FindFirst(JwtClaims.StoreId)?.Value, out var id) ? id : null;
+    public Guid? DeviceId => Guid.TryParse(Principal.FindFirst(JwtClaims.DeviceId)?.Value, out var id) ? id : null;
     public string Role => Principal.FindFirst(JwtClaims.Role)?.Value ?? throw Unauthenticated();
 
     private System.Security.Claims.ClaimsPrincipal Principal

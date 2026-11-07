@@ -17,9 +17,9 @@
 --   ... psql -U postgres -d kassir_x3 -X -v products=150000 -f /db/bench/generate.sql
 -- На ноутбуке занимает порядка 5–15 минут (×3 — дольше).
 --
--- Только генератор (не миграции) создаёт стенд для замеров API: код фирмы
--- «bench» у основного тенанта и пользователя «bench» (пароль
--- bench-password-1, кладовщик филиала 1). В рабочей базе их нет.
+-- Только генератор (не миграции) создаёт стенд для ручной проверки и замеров
+-- API (_bench_stand.sql): фирма «bench», менеджер «bench» / bench-password-1,
+-- PIN 1234 у кассиров, весовой товар с PLU 01234. В рабочей базе их нет.
 -- =====================================================================
 \set ON_ERROR_STOP on
 \timing on
@@ -53,14 +53,8 @@ END $$;
 \set seed 0.42
 \ir _gen_tenant.sql
 
-\echo '== Стенд замеров API: фирма «bench», пользователь «bench»'
-UPDATE tenants SET code = 'bench' WHERE id = :'tenant';
--- Хеш PBKDF2-SHA512 (210 000 итераций) пароля «bench-password-1» с фиксированной
--- солью — в формате Pbkdf2PasswordHasher. Пароль известен: только для стенда.
-INSERT INTO users (id, tenant_id, store_id, full_name, login, role, password_hash)
-SELECT 'b0000000-0000-0000-0000-00000000be01', :'tenant', s.id, 'Замер API', 'bench', 'storekeeper',
-       'pbkdf2-sha512$210000$a2Fzc2lyLWJlbmNoLXYxIQ==$FoCyvr0+4QpEQUonMRT4kHQlRU9Fup/90CPFvubUVAU='
-FROM stores s WHERE s.tenant_id = :'tenant' AND s.name = 'Филиал 1';
+\echo '== Стенд для ручной проверки и замеров API (db/bench/_bench_stand.sql)'
+\ir _bench_stand.sql
 
 \echo '== Тенант 2: шумовой (50 000 вариантов, 10 000 чеков)'
 \set tenant 'd0000000-0000-0000-0000-000000000001'

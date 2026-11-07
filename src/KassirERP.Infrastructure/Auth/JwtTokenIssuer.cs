@@ -27,6 +27,11 @@ internal sealed class JwtTokenIssuer(JwtOptions options, TimeProvider time) : IT
             claims[JwtClaims.StoreId] = store.ToString();
         }
 
+        if (subject.DeviceId is { } device)
+        {
+            claims[JwtClaims.DeviceId] = device.ToString();
+        }
+
         var token = _handler.CreateToken(new SecurityTokenDescriptor
         {
             Issuer = options.Issuer,

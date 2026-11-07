@@ -97,13 +97,20 @@ FROM (SELECT variant_id FROM stock_movements
 JOIN product_variants v ON v.id = m.variant_id;
 
 -- ---------------------------------------------------------------------
--- Смены для касс bench-kassa-0..99, id детерминированный:
--- md5('bench-shift-' || client_id)::uuid — скрипт кассы считает его сам.
+-- Кассы bench-kassa-0..99 и их смены, id детерминированные:
+-- md5('bench-device-' || client_id)::uuid и md5('bench-shift-' || client_id)::uuid —
+-- скрипт кассы считает их сам. Секрета у касс нет: pgbench пишет чеки напрямую.
 -- ---------------------------------------------------------------------
+INSERT INTO devices (id, tenant_id, store_id, name, secret_hash)
+SELECT md5('bench-device-' || i)::uuid, 'c0000000-0000-0000-0000-000000000001',
+       (SELECT v::uuid FROM bench_conc.params WHERE k = 'store'), 'bench-kassa-' || i, 'none'
+FROM generate_series(0, 99) i
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO cash_shifts (id, tenant_id, store_id, device_id, cashier_id, status, opened_at)
 SELECT md5('bench-shift-' || i)::uuid, 'c0000000-0000-0000-0000-000000000001',
        (SELECT v::uuid FROM bench_conc.params WHERE k = 'store'),
-       'bench-kassa-' || i,
+       md5('bench-device-' || i)::uuid,
        (SELECT v::uuid FROM bench_conc.params WHERE k = 'cashier'),
        'open', now()
 FROM generate_series(0, 99) i

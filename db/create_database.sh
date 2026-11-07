@@ -8,17 +8,19 @@
 #
 # --recreate  удалить базу, если есть (все данные в ней пропадут)
 # --until N   применить миграции только до номера N включительно
+# Миграции на существующую базу с данными — по одной:
+#   docker compose exec -T postgres psql -U postgres -d kassir -v ON_ERROR_STOP=1 -f /db/migrations/0004_devices.sql
 # =====================================================================
 set -euo pipefail
 
 DB=${1:?Укажите имя базы}
 shift
 RECREATE=0
-UNTIL=9999
+UNTIL_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --recreate) RECREATE=1 ;;
-    --until) UNTIL=$((10#$2)); shift ;;
+    --until) UNTIL_ARGS=(--until "$2"); shift ;;
     *) echo "Неизвестный аргумент: $1" >&2; exit 2 ;;
   esac
   shift
@@ -39,17 +41,6 @@ fi
 
 echo "== Создаю базу $DB"
 "${PSQL[@]}" -d postgres -c "CREATE DATABASE \"$DB\""
-
-echo "   0001 kassir_schema_v1.sql"
-"${PSQL[@]}" -d "$DB" -f /db/kassir_schema_v1.sql
-
-for f in /db/migrations/[0-9][0-9][0-9][0-9]_*.sql; do
-  n=$(basename "$f" | cut -c1-4)
-  if [ $((10#$n)) -gt "$UNTIL" ]; then
-    continue
-  fi
-  echo "   $(basename "$f")"
-  "${PSQL[@]}" -d "$DB" -f "$f"
-done
+bash /db/apply_schema.sh "$DB" "${UNTIL_ARGS[@]}"
 
 echo "== Готово: $DB, schema_version по умолчанию $("${PSQL[@]}" -d "$DB" -tAc "SELECT column_default FROM information_schema.columns WHERE table_name = 'tenants' AND column_name = 'schema_version'")"

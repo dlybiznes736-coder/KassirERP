@@ -60,4 +60,5 @@ public static class JwtClaims
     public const string StoreId = "store_id";
     public const string Role = "role";
     public const string Method = "amr";
+    public const string DeviceId = "device_id";
 }

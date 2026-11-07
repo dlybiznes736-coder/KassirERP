@@ -9,14 +9,27 @@ namespace KassirERP.Api.Tests.Infrastructure;
 
 public static class ApiClient
 {
+    /// <summary>Вход: по паролю, если он есть у пользователя, иначе по PIN с кассы его филиала.</summary>
     public static async Task<LoginResponse> LoginAsync(this HttpClient client, TestTenant tenant, string userKey, Guid? storeId = null)
     {
         var user = tenant.Users[userKey];
-        var response = user.Pin is not null
-            ? await client.PostAsJsonAsync("/auth/pin", new { tenantCode = tenant.Code, login = user.Login, pin = user.Pin })
-            : await client.PostAsJsonAsync("/auth/login", new { tenantCode = tenant.Code, login = user.Login, password = user.Password, storeId });
+        var response = user.Password is not null
+            ? await client.PostAsJsonAsync("/auth/login", new { tenantCode = tenant.Code, login = user.Login, password = user.Password, storeId })
+            : await client.PinAsync(tenant.DeviceFor(user), user.Login, user.Pin!);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<LoginResponse>())!;
+    }
+
+    /// <summary>Вход по PIN с кассы (device = null — без заголовка кассы).</summary>
+    public static Task<HttpResponseMessage> PinAsync(this HttpClient client, TestDevice? device, string login, string pin, string? secret = null)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/auth/pin") { Content = JsonContent.Create(new { login, pin }) };
+        if (device is not null)
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Device", $"{device.Id}.{secret ?? device.Secret}");
+        }
+
+        return client.SendAsync(request);
     }
 
     public static HttpRequestMessage Get(string url, string? token)

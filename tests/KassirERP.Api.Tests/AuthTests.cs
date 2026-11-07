@@ -62,22 +62,25 @@ public sealed class AuthTests(KassirApiFactory factory)
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    // Было: «PIN-вход требует филиал у кассира». Теперь филиал даёт касса:
+    // кассир без привязки входит на кассе любого филиала своей фирмы.
     [Fact]
-    public async Task Pin_login_requires_store()
+    public async Task Pin_login_takes_store_from_the_device()
     {
         var user = _data.A.Users["nostore"];
 
-        var response = await _client.PostAsJsonAsync("/auth/pin", new { tenantCode = _data.A.Code, login = user.Login, pin = user.Pin });
+        var response = await _client.PinAsync(_data.A.Devices["kassa2"], user.Login, user.Pin!);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(_data.A.Store2Id, (await response.JsonAsync()).GetProperty("storeId").GetGuid());
     }
 
     [Fact]
     public async Task Pin_is_locked_after_five_wrong_attempts_even_for_the_right_pin()
     {
         var user = _data.A.Users["locked"];
-        async Task<HttpResponseMessage> Try(string pin) =>
-            await _client.PostAsJsonAsync("/auth/pin", new { tenantCode = _data.A.Code, login = user.Login, pin });
+        var device = _data.A.DeviceFor(user);
+        async Task<HttpResponseMessage> Try(string pin) => await _client.PinAsync(device, user.Login, pin);
 
         for (var i = 0; i < AuthService.MaxPinAttempts; i++)
         {
@@ -96,8 +99,8 @@ public sealed class AuthTests(KassirApiFactory factory)
         // 30 одновременных попыток: счётчик резервируется до проверки хеша,
         // поэтому проверено будет не больше MaxPinAttempts вариантов.
         var user = _data.B.Users["locked"];
-        var tasks = Enumerable.Range(0, 30).Select(i =>
-            _client.PostAsJsonAsync("/auth/pin", new { tenantCode = _data.B.Code, login = user.Login, pin = (1000 + i).ToString() }));
+        var device = _data.B.DeviceFor(user);
+        var tasks = Enumerable.Range(0, 30).Select(i => _client.PinAsync(device, user.Login, (1000 + i).ToString()));
 
         var codes = (await Task.WhenAll(tasks)).Select(r => r.StatusCode).ToList();
 

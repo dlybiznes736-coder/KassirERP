@@ -19,6 +19,14 @@ SELECT n, uuid_v7() AS id FROM generate_series(1, :n_stores) n;
 INSERT INTO stores (id, tenant_id, name, address)
 SELECT id, :'tenant', 'Филиал ' || n, 'ул. Тестовая, ' || n FROM g_stores;
 
+-- Касса на филиал. Без секрета ('none'): с неё нельзя войти по PIN —
+-- генератору это и не нужно, замеры входят по паролю.
+CREATE TEMP TABLE g_devices AS
+SELECT n AS store_n, id AS store_id, uuid_v7() AS id FROM g_stores;
+
+INSERT INTO devices (id, tenant_id, store_id, name, secret_hash)
+SELECT id, :'tenant', store_id, 'kassa-' || store_n, 'none' FROM g_devices;
+
 CREATE TEMP TABLE g_owner AS SELECT uuid_v7() AS id;
 INSERT INTO users (id, tenant_id, full_name, login, role)
 SELECT id, :'tenant', 'Владелец', 'owner', 'owner' FROM g_owner;
@@ -177,9 +185,9 @@ JOIN g_users u ON u.store_id = s.id AND u.k = 1 + d % 2;
 
 INSERT INTO cash_shifts (id, tenant_id, store_id, device_id, cashier_id, status,
                          opened_at, closed_at, opening_cash, synced_at)
-SELECT id, :'tenant', store_id, 'kassa-' || store_n, cashier_id, 'closed',
-       opened_at, closed_at, 5000, closed_at
-FROM g_shifts;
+SELECT s.id, :'tenant', s.store_id, d.id, s.cashier_id, 'closed',
+       s.opened_at, s.closed_at, 5000, s.closed_at
+FROM g_shifts s JOIN g_devices d ON d.store_n = s.store_n;
 
 -- ---------------------------------------------------------------------
 -- Чеки. Строк в чеке 1–4 (в среднем ~1.5). Спрос неравномерный
@@ -248,12 +256,13 @@ INSERT INTO sales (id, tenant_id, store_id, shift_id, cashier_id, customer_id, d
                    local_number, type, return_of_sale_id, subtotal, discount_total, total,
                    created_at_local, synced_at)
 SELECT d.id, :'tenant', d.store_id, d.shift_id, d.cashier_id, c.id,
-       'kassa-' || d.store_n,
+       dv.id,
        row_number() OVER (PARTITION BY d.store_id ORDER BY d.created_at, d.id),
        d.type, d.orig_id, t.subtotal, t.discount_total, t.subtotal - t.discount_total,
        d.created_at, d.created_at + interval '5 seconds'
 FROM g_docs d
 JOIN g_doc_totals t ON t.sale_id = d.id
+JOIN g_devices dv ON dv.store_n = d.store_n
 LEFT JOIN g_customers c ON d.has_customer AND c.n = 1 + floor(d.r_cust * :n_customers)::int
 ORDER BY d.created_at;
 
@@ -290,7 +299,7 @@ CROSS JOIN LATERAL (
 -- ---------------------------------------------------------------------
 INSERT INTO sync_outbox (id, tenant_id, device_id, entity, entity_id, op, payload,
                          attempts, next_attempt_at, created_at, sent_at)
-SELECT uuid_v7(), :'tenant', 'kassa-1', (ARRAY['sale','product','stock','customer'])[1 + n % 4],
+SELECT uuid_v7(), :'tenant', (SELECT id FROM g_devices WHERE store_n = 1), (ARRAY['sale','product','stock','customer'])[1 + n % 4],
        gen_random_uuid(), 'upsert', jsonb_build_object('n', n, 'state', 'sent'),
        1, c, c, c + interval '2 seconds'
 FROM (SELECT n, :'t_end'::timestamptz - random() * interval '365 days' AS c
@@ -298,7 +307,7 @@ FROM (SELECT n, :'t_end'::timestamptz - random() * interval '365 days' AS c
 
 INSERT INTO sync_outbox (id, tenant_id, device_id, entity, entity_id, op, payload,
                          attempts, next_attempt_at, created_at, sent_at)
-SELECT uuid_v7(), :'tenant', 'kassa-' || (1 + n % :n_stores),
+SELECT uuid_v7(), :'tenant', (SELECT id FROM g_devices WHERE store_n = 1 + n % :n_stores),
        (ARRAY['sale','product','stock','customer'])[1 + n % 4],
        gen_random_uuid(), 'upsert',
        jsonb_build_object('n', n, 'name', 'Кроссовки Runner кожаные', 'price', 4990, 'size', '42'),

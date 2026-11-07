@@ -1,5 +1,7 @@
 using KassirERP.Application.Auth;
 using KassirERP.Application.Catalog;
+using KassirERP.Application.Devices;
+using KassirERP.Application.Purchases;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace KassirERP.Application;
@@ -11,6 +13,8 @@ public static class DependencyInjection
     {
         services.AddSingleton<AuthService>();
         services.AddScoped<CatalogService>();
+        services.AddScoped<DeviceService>();
+        services.AddScoped<PurchaseService>();
         return services;
     }
 }

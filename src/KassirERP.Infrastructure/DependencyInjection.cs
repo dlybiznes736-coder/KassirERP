@@ -1,8 +1,13 @@
+using KassirERP.Application.Abstractions;
 using KassirERP.Application.Auth;
 using KassirERP.Application.Catalog;
+using KassirERP.Application.Devices;
+using KassirERP.Application.Purchases;
 using KassirERP.Infrastructure.Auth;
 using KassirERP.Infrastructure.Catalog;
+using KassirERP.Infrastructure.Devices;
 using KassirERP.Infrastructure.Persistence;
+using KassirERP.Infrastructure.Purchases;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -16,7 +21,7 @@ public static class DependencyInjection
     /// <summary>Потолок пула соединений к Postgres на экземпляр API, если в строке подключения не задан.</summary>
     public const int DefaultMaxPoolSize = 30;
 
-    /// <summary>Postgres, вход (пароль/PIN, JWT), товары, health check.</summary>
+    /// <summary>Postgres, вход (пароль/PIN, JWT), кассы, товары, приход, health check.</summary>
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         var connectionString = configuration.GetConnectionString(ConnectionStringName);
@@ -51,7 +56,14 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<ITokenIssuer, JwtTokenIssuer>();
         services.AddSingleton<IAuthStore, AuthStore>();
+
+        services.AddSingleton<RevokedDeviceCache>();
+        services.AddSingleton<IRevokedDevices>(sp => sp.GetRequiredService<RevokedDeviceCache>());
+        services.AddHostedService(sp => sp.GetRequiredService<RevokedDeviceCache>());
+        services.AddScoped<IDeviceRegistry, DeviceRegistry>();
+
         services.AddScoped<IProductCatalog, ProductCatalog>();
+        services.AddScoped<IPurchaseStore, PurchaseStore>();
 
         services.AddHealthChecks()
             .AddCheck<PostgresHealthCheck>("postgres", tags: [HealthTags.Ready], timeout: TimeSpan.FromSeconds(3));

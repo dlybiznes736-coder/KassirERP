@@ -30,8 +30,15 @@ public class KassirApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     /// <summary>Сколько дополнительных кассиров (cashier-01…) завести в фирме A.</summary>
     protected virtual int ExtraCashiers => 0;
 
-    /// <summary>Лимит запросов на /auth/*. По умолчанию в тестах — практически без лимита.</summary>
+    /// <summary>Лимит запросов на вход по паролю и регистрацию кассы (по IP). В тестах — практически без лимита.</summary>
     protected virtual void ConfigureAuthRateLimit(AuthRateLimitOptions options)
+    {
+        options.TokenLimit = 1_000_000;
+        options.TokensPerMinute = 1_000_000;
+    }
+
+    /// <summary>Лимит входа по PIN (по кассе). В тестах — практически без лимита.</summary>
+    protected virtual void ConfigurePinRateLimit(PinRateLimitOptions options)
     {
         options.TokenLimit = 1_000_000;
         options.TokensPerMinute = 1_000_000;
@@ -49,7 +56,11 @@ public class KassirApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
-        builder.ConfigureTestServices(services => services.Configure<AuthRateLimitOptions>(ConfigureAuthRateLimit));
+        builder.ConfigureTestServices(services =>
+        {
+            services.Configure<AuthRateLimitOptions>(ConfigureAuthRateLimit);
+            services.Configure<PinRateLimitOptions>(ConfigurePinRateLimit);
+        });
     }
 
     public async Task InitializeAsync()
@@ -80,27 +91,38 @@ public sealed class ApiCollection : ICollectionFixture<KassirApiFactory>
     public const string Name = "api";
 }
 
-/// <summary>Боевой лимит /auth/* (значения по умолчанию) и 50 кассиров в фирме A.</summary>
+/// <summary>Боевые лимиты входа (значения по умолчанию) и 50 кассиров с 50 кассами в фирме A.</summary>
 public sealed class ProductionRateLimitFactory : KassirApiFactory
 {
     public const int Cashiers = 50;
 
     protected override int ExtraCashiers => Cashiers;
 
+    // Ничего не меняем: проверяются значения по умолчанию.
     protected override void ConfigureAuthRateLimit(AuthRateLimitOptions options)
     {
-        // Ничего не меняем: проверяются значения по умолчанию из AuthRateLimitOptions.
+    }
+
+    protected override void ConfigurePinRateLimit(PinRateLimitOptions options)
+    {
     }
 }
 
-/// <summary>Крошечный лимит: 5 запросов, пополнение 1 в минуту.</summary>
+/// <summary>Крошечные лимиты: 5 запросов по IP и 3 входа по PIN с одной кассы, пополнение 1 в минуту.</summary>
 public sealed class TinyRateLimitFactory : KassirApiFactory
 {
     public const int Limit = 5;
+    public const int PinLimit = 3;
 
     protected override void ConfigureAuthRateLimit(AuthRateLimitOptions options)
     {
         options.TokenLimit = Limit;
+        options.TokensPerMinute = 1;
+    }
+
+    protected override void ConfigurePinRateLimit(PinRateLimitOptions options)
+    {
+        options.TokenLimit = PinLimit;
         options.TokensPerMinute = 1;
     }
 }

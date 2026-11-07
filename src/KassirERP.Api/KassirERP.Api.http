@@ -1,3 +1,8 @@
+# Ручная проверка на стенде генератора (db/bench/_bench_stand.sql):
+# фирма bench, менеджер bench / bench-password-1 (филиал 1), кассиры cashier1_1… с PIN 1234,
+# весовой товар PLU 01234 (520.00 за кг, 50 кг в филиале 1).
+# Запросы выполняются по порядку: каждый берёт значения из ответа предыдущих.
+
 @api = http://localhost:5256
 
 ### Процесс жив
@@ -5,3 +10,81 @@ GET {{api}}/health/live
 
 ### Готов принимать запросы (Postgres + роль)
 GET {{api}}/health/ready
+
+### 1. Менеджер входит по паролю
+# @name manager
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{ "tenantCode": "bench", "login": "bench", "password": "bench-password-1" }
+
+### 2. Менеджер выдаёт одноразовый код подключения кассы (10 минут)
+# @name code
+POST {{api}}/devices/enrollment-codes
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 3. Касса обменивает код на свой id и секрет (секрет — один раз)
+# @name device
+POST {{api}}/devices/enroll
+Content-Type: application/json
+
+{ "code": "{{code.response.body.$.code}}", "name": "Касса у входа" }
+
+### 4. Кассир входит по PIN — только с секретом кассы
+# @name cashier
+POST {{api}}/auth/pin
+Authorization: Device {{device.response.body.$.deviceId}}.{{device.response.body.$.deviceSecret}}
+Content-Type: application/json
+
+{ "login": "cashier1_1", "pin": "1234" }
+
+### 4a. Тот же PIN без кассы — 401
+POST {{api}}/auth/pin
+Content-Type: application/json
+
+{ "login": "cashier1_1", "pin": "1234" }
+
+### 5. Скан обычного штрихкода (пара из генератора)
+GET {{api}}/products/barcode/4600000250001
+Authorization: Bearer {{cashier.response.body.$.accessToken}}
+
+### 6. Скан весового: 22 01234 01250 2 → PLU 01234, 1.250 кг = 650.00
+GET {{api}}/products/barcode/2201234012502
+Authorization: Bearer {{cashier.response.body.$.accessToken}}
+
+### 7. Весовой несуществующего товара (PLU 99999) — 404
+GET {{api}}/products/barcode/2299999012509
+Authorization: Bearer {{cashier.response.body.$.accessToken}}
+
+### 8. Приход: черновик накладной (id создаёт клиент; повтор того же запроса — 200, не дубль)
+# @name purchase
+POST {{api}}/purchases
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{
+  "id": "{{$guid}}",
+  "number": "ПН-стенд-1",
+  "items": [
+    { "id": "{{$guid}}", "variantId": "b0000000-0000-0000-0000-00000000be03", "qty": 10.5, "costPrice": 300.00, "expiresOn": "2026-12-31" }
+  ]
+}
+
+### 9. Проведение: +10.5 кг колбасы в филиале 1, срок годности — в движении склада
+POST {{api}}/purchases/{{purchase.response.body.$.id}}/accept
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 10. Проведённую накладную изменить нельзя — 409
+PUT {{api}}/purchases/{{purchase.response.body.$.id}}/items
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+Content-Type: application/json
+
+{ "items": [ { "id": "{{$guid}}", "variantId": "b0000000-0000-0000-0000-00000000be03", "qty": 1000, "costPrice": 1 } ] }
+
+### 11. Остаток после прихода: вырос на 10.5 кг (на свежем стенде 50 → 60.5)
+GET {{api}}/products/b0000000-0000-0000-0000-00000000be02
+Authorization: Bearer {{manager.response.body.$.accessToken}}
+
+### 12. Отключить кассу — её токены перестают работать сразу
+POST {{api}}/devices/{{device.response.body.$.deviceId}}/revoke
+Authorization: Bearer {{manager.response.body.$.accessToken}}

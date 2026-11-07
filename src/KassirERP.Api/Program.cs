@@ -32,27 +32,34 @@ builder.Services
     });
 
 builder.Services.AddAuthorizationBuilder()
-    .AddPolicy(ProductEndpoints.CatalogWritePolicy, policy => policy.RequireRole(Roles.CatalogWriters));
+    .AddPolicy(ProductEndpoints.CatalogWritePolicy, policy => policy.RequireRole(Roles.CatalogWriters))
+    .AddPolicy(PurchaseEndpoints.WritePolicy, policy => policy.RequireRole(Roles.CatalogWriters))
+    // Новую кассу подключает только менеджер, вошедший по паролю: с украденной
+    // кассы (вход по PIN) выпустить ещё одну кассу нельзя.
+    .AddPolicy(DeviceEndpoints.ManagePolicy, policy => policy
+        .RequireRole(Roles.Owner, Roles.Admin, Roles.Manager)
+        .RequireClaim(JwtClaims.Method, "pwd"));
 
-// --- Вход: лимит по IP поверх блокировки учётки (расчёт — AuthRateLimitOptions)
+// --- Лимиты входа поверх блокировки учётки --------------------------------
+// По IP — вход по паролю и регистрация кассы (AuthRateLimitOptions). По кассе —
+// вход по PIN (PinRateLimitOptions): 50 касс за одним NAT друг другу не мешают.
 // За обратным прокси нужен UseForwardedHeaders, иначе все клиенты — один IP прокси.
 builder.Services.Configure<AuthRateLimitOptions>(builder.Configuration.GetSection(AuthRateLimitOptions.Section));
+builder.Services.Configure<PinRateLimitOptions>(builder.Configuration.GetSection(PinRateLimitOptions.Section));
 builder.Services.AddRateLimiter(options =>
 {
     options.AddPolicy(AuthEndpoints.RateLimitPolicy, context =>
     {
         var limits = context.RequestServices.GetRequiredService<IOptions<AuthRateLimitOptions>>().Value;
-        var perMinute = Math.Max(1, limits.TokensPerMinute);
-        return RateLimitPartition.GetTokenBucketLimiter(
-            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            _ => new TokenBucketRateLimiterOptions
-            {
-                TokenLimit = Math.Max(1, limits.TokenLimit),
-                TokensPerPeriod = 1,
-                ReplenishmentPeriod = TimeSpan.FromMinutes(1) / perMinute,
-                QueueLimit = 0,
-                AutoReplenishment = true,
-            });
+        return TokenBucket("ip:" + (context.Connection.RemoteIpAddress?.ToString() ?? "unknown"), limits.TokenLimit, limits.TokensPerMinute);
+    });
+    options.AddPolicy(AuthEndpoints.PinRateLimitPolicy, context =>
+    {
+        var limits = context.RequestServices.GetRequiredService<IOptions<PinRateLimitOptions>>().Value;
+        var key = DeviceHeader.TryParse(context.Request, out var deviceId, out _)
+            ? "device:" + deviceId
+            : "ip:" + (context.Connection.RemoteIpAddress?.ToString() ?? "unknown");
+        return TokenBucket(key, limits.TokenLimit, limits.TokensPerMinute);
     });
     options.OnRejected = (context, ct) =>
     {
@@ -62,7 +69,7 @@ builder.Services.AddRateLimiter(options =>
         context.HttpContext.Response.Headers.RetryAfter = seconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return new ValueTask(Results.Problem(
             statusCode: StatusCodes.Status429TooManyRequests,
-            title: "Слишком много запросов на вход с этого адреса",
+            title: "Слишком много запросов на вход",
             detail: $"Повторите через {seconds} с.").ExecuteAsync(context.HttpContext));
     };
 });
@@ -79,6 +86,7 @@ var app = builder.Build();
 app.UseExceptionHandler();
 app.UseMiddleware<TenantInputGuard>();
 app.UseAuthentication();
+app.UseMiddleware<RevokedDeviceGuard>();
 app.UseAuthorization();
 app.UseRateLimiter();
 
@@ -97,9 +105,21 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 });
 
 app.MapAuthEndpoints();
+app.MapDeviceEndpoints();
 app.MapProductEndpoints();
+app.MapPurchaseEndpoints();
 
 app.Run();
+
+static RateLimitPartition<string> TokenBucket(string key, int tokenLimit, int tokensPerMinute) =>
+    RateLimitPartition.GetTokenBucketLimiter(key, _ => new TokenBucketRateLimiterOptions
+    {
+        TokenLimit = Math.Max(1, tokenLimit),
+        TokensPerPeriod = 1,
+        ReplenishmentPeriod = TimeSpan.FromMinutes(1) / Math.Max(1, tokensPerMinute),
+        QueueLimit = 0,
+        AutoReplenishment = true,
+    });
 
 /// <summary>Точка входа для WebApplicationFactory в тестах.</summary>
 public partial class Program;

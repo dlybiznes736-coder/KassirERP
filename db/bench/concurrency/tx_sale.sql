@@ -23,7 +23,7 @@ LEFT JOIN stock s ON s.tenant_id = v.tenant_id AND s.store_id = ':store' AND s.v
 INSERT INTO sales (id, tenant_id, store_id, shift_id, cashier_id, device_id, local_number,
                    subtotal, total, created_at_local)
 VALUES (':sid', ':tenant', ':store', md5('bench-shift-' || :client_id)::uuid, ':cashier',
-        'bench-kassa-' || :client_id, :no, :total, :total, now());
+        md5('bench-device-' || :client_id)::uuid, :no, :total, :total, now());
 \if :items_last
 INSERT INTO payments (id, tenant_id, sale_id, method, amount)
 VALUES (gen_random_uuid(), ':tenant', ':sid', 'cash', :total);

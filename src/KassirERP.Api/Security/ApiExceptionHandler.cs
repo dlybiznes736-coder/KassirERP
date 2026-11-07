@@ -1,4 +1,4 @@
-using KassirERP.Application.Catalog;
+using KassirERP.Application.Abstractions;
 using Microsoft.AspNetCore.Diagnostics;
 
 namespace KassirERP.Api.Security;
@@ -10,7 +10,7 @@ internal sealed class ApiExceptionHandler : IExceptionHandler
     {
         IResult? result = exception switch
         {
-            CatalogValidationException e => Results.Problem(statusCode: 400, title: "Неверный запрос", detail: e.Message),
+            AppValidationException e => Results.Problem(statusCode: 400, title: "Неверный запрос", detail: e.Message),
             // Тело не разобралось: в т.ч. неизвестное поле (tenantId) в JSON.
             BadHttpRequestException e => Results.Problem(statusCode: e.StatusCode, title: "Неверный запрос", detail: e.Message),
             UnauthorizedAccessException => Results.Problem(statusCode: 401, title: "Нужен вход"),
